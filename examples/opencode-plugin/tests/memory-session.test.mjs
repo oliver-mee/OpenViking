@@ -575,3 +575,46 @@ test("explicit commit writes the response trace_id to the plugin log", async () 
     await new Promise((resolve) => server.close(resolve))
   }
 })
+
+test("a session is not committed again with nothing new since its last commit", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+      const commitIfNew = { commit: true, onlyIfUncommitted: true, reason: "cleanup" }
+
+      await manager.init()
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-short" } } })
+      await manager.handleEvent({
+        type: "message.updated",
+        properties: { info: { id: "msg-short", sessionID: "oc-short", role: "user" } },
+      })
+      await manager.handleEvent({
+        type: "message.part.updated",
+        properties: {
+          part: { id: "part-short", messageID: "msg-short", sessionID: "oc-short", type: "text", text: "A short session." },
+        },
+      })
+
+      await manager.flushSession("oc-short", commitIfNew)
+      await manager.flushSession("oc-short", commitIfNew)
+      await manager.flushAll({ commit: true, onlyIfUncommitted: true })
+
+      const commits = requests.filter((request) => request.method === "POST" && request.url?.endsWith("/commit"))
+      assert.deepEqual(commits.map((request) => request.url), ["/api/v1/sessions/oc-oc-short/commit"])
+    })
+  })
+})
+
+test("cleanup does not commit a session with no transcript", async () => {
+  await withCaptureServer(async ({ endpoint, requests }) => {
+    await withTempDir("ov-oc-session-", async (dir) => {
+      const manager = createMemorySessionManager({ config: baseConfig(endpoint), pluginRoot: dir })
+
+      await manager.init()
+      await manager.handleEvent({ type: "session.created", properties: { info: { id: "oc-empty" } } })
+      await manager.flushAll({ commit: true, onlyIfUncommitted: true })
+
+      assert.equal(requests.some((request) => request.url?.endsWith("/commit")), false)
+    })
+  })
+})

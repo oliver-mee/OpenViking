@@ -270,7 +270,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     debouncedSaveState()
   }
 
-  async function flushAll({ commit = false } = {}) {
+  async function flushAll({ commit = false, onlyIfUncommitted = false } = {}) {
     if (saveTimer) {
       clearTimeout(saveTimer)
       saveTimer = null
@@ -280,7 +280,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     // See https://github.com/volcengine/OpenViking/issues/4490
     for (const sessionId of sessions.keys()) {
       try {
-        await flushSession(sessionId, { commit, reason: "flushAll" })
+        await flushSession(sessionId, { commit, onlyIfUncommitted, reason: "flushAll" })
       } catch (err) {
         console.warn(
           `[opencode-plugin] flushAll skipped session ${sessionId}:`,
@@ -291,12 +291,21 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     await enqueueSave()
   }
 
-  async function flushSession(opencodeSessionId, { commit = false, reason = "manual" } = {}) {
+  // onlyIfUncommitted skips the commit when nothing arrived since the last one.
+  async function flushSession(opencodeSessionId, {
+    commit = false,
+    reason = "manual",
+    onlyIfUncommitted = false,
+  } = {}) {
     if (!opencodeSessionId) return false
     const state = sessions.get(opencodeSessionId)
     if (!state) return false
 
     const added = await flushPendingMessages(opencodeSessionId, state)
+    if (commit && onlyIfUncommitted && !hasUncommittedActivity(state)) {
+      await enqueueSave()
+      return true
+    }
     if (commit && isCaptureEnabled(config)) {
       await commitOvSession(state.ovSessionId, { force: true, reason })
     } else if (added > 0) {
@@ -464,6 +473,11 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     return commitOvSession(state.ovSessionId, { force: true, reason: "threshold" })
   }
 
+  function hasUncommittedActivity(state) {
+    if (state.messages.size === 0) return false
+    return (state.lastActivityAt ?? 0) > (state.lastCommitTime ?? 0)
+  }
+
   async function commitOvSession(ovSessionId, { force = false, reason = "manual", abortSignal } = {}) {
     if (!force && config.commitTokenThreshold <= 0) return { status: "skipped" }
     const body = { keep_recent_count: config.commitKeepRecentCount }
@@ -480,6 +494,8 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       log("INFO", "session", "Committed OpenViking session", {
         openviking_session: ovSessionId,
         reason,
+        status: res.result?.status,
+        archived: res.result?.archived,
         trace_id: traceId,
       })
       return { status: "accepted", result: res.result, traceId }
