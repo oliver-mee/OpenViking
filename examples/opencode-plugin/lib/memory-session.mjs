@@ -119,6 +119,8 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       createdAt: state.createdAt,
       lastActivityAt: state.lastActivityAt,
       lastCommitTime: state.lastCommitTime,
+      captureSeq: state.captureSeq,
+      committedSeq: state.committedSeq,
       compactedAt: state.compactedAt,
       messages: Array.from(state.messages.entries()).map(([messageId, message]) => ([
         messageId,
@@ -139,6 +141,11 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       createdAt: persisted.createdAt,
       lastActivityAt: persisted.lastActivityAt,
       lastCommitTime: persisted.lastCommitTime,
+      // State written before the watermark existed: treat activity after the
+      // last commit as one uncommitted capture.
+      captureSeq: persisted.captureSeq ??
+        ((persisted.lastActivityAt ?? 0) > (persisted.lastCommitTime ?? 0) ? 1 : 0),
+      committedSeq: persisted.committedSeq ?? 0,
       compactedAt: persisted.compactedAt,
       messages: new Map((persisted.messages ?? []).map(([messageId, message]) => ([
         messageId,
@@ -343,6 +350,8 @@ export function createMemorySessionManager({ config, pluginRoot }) {
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
       lastCommitTime: undefined,
+      captureSeq: 0,
+      committedSeq: 0,
       compactedAt: undefined,
       messages: new Map(),
     }
@@ -453,6 +462,7 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     }
     if (added > 0) {
       state.lastActivityAt = Date.now()
+      state.captureSeq = (state.captureSeq ?? 0) + 1
       debouncedSaveState()
     }
     return added
@@ -473,14 +483,21 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     return commitOvSession(state.ovSessionId, { force: true, reason: "threshold" })
   }
 
+  // captureSeq advances on every successful capture. A commit snapshots it
+  // when the request is sent, so a capture that lands while the commit is in
+  // flight stays uncommitted.
   function hasUncommittedActivity(state) {
     if (state.messages.size === 0) return false
-    return (state.lastActivityAt ?? 0) > (state.lastCommitTime ?? 0)
+    return (state.captureSeq ?? 0) > (state.committedSeq ?? 0)
   }
 
   async function commitOvSession(ovSessionId, { force = false, reason = "manual", abortSignal } = {}) {
     if (!force && config.commitTokenThreshold <= 0) return { status: "skipped" }
     const body = { keep_recent_count: config.commitKeepRecentCount }
+    const watermarks = new Map()
+    for (const state of sessions.values()) {
+      if (state.ovSessionId === ovSessionId) watermarks.set(state, state.captureSeq ?? 0)
+    }
     const res = await fetchJSON(config, `/api/v1/sessions/${encodeURIComponent(ovSessionId)}/commit`, {
       method: "POST",
       body: JSON.stringify(body),
@@ -489,6 +506,9 @@ export function createMemorySessionManager({ config, pluginRoot }) {
     if (res.ok) {
       for (const state of sessions.values()) {
         if (state.ovSessionId === ovSessionId) state.lastCommitTime = Date.now()
+      }
+      for (const [state, seq] of watermarks) {
+        state.committedSeq = Math.max(state.committedSeq ?? 0, seq)
       }
       const traceId = res.traceId || res.result?.trace_id
       log("INFO", "session", "Committed OpenViking session", {
