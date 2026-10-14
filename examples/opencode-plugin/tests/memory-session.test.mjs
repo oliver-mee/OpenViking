@@ -727,9 +727,11 @@ test("a message captured while a commit is in flight is not marked committed by 
       await commitStarted
 
       await addUserMessage(manager, "oc-in-flight", "msg-second", "Second message.")
-      await manager.flushSession("oc-in-flight", { reason: "session.idle" })
+      // Upstream serializes flushes: queue the second one without waiting
+      // for it before releasing the first commit response.
+      const secondFlush = manager.flushSession("oc-in-flight", { reason: "session.idle" })
       releaseCommit()
-      await firstCommit
+      await Promise.all([firstCommit, secondFlush])
       await manager.flushAll({ commit: true, onlyIfUncommitted: true })
 
       const commits = requests.filter((request) => request.method === "POST" && request.url?.endsWith("/commit"))
