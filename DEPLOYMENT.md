@@ -3,10 +3,10 @@
 ## Source model
 
 - `main` mirrors `https://github.com/volcengine/OpenViking.git`.
-- `deploy` is based on an upstream stable tag and carries reviewed fixes from
+- `ome/deploy` is based on an upstream stable tag and carries reviewed fixes from
   [PATCHES.md](PATCHES.md).
 - Fix branches target upstream `main`; only reviewed commits are cherry-picked
-  into `deploy`. Never merge `main` or an upstream feature branch into `deploy`.
+  into `ome/deploy`. Never merge `main` or an upstream feature branch into `ome/deploy`.
 
 ## Release build
 
@@ -49,7 +49,7 @@ ExecStart=%h/.local/bin/openviking-server --with-bot
 ## Client plugins
 
 - Codex uses the `openviking` marketplace from `oliver-mee/OpenViking` ref
-  `deploy`, so the plugin source and server source share the release tag.
+  `ome/deploy`, so the plugin source and server source share the release tag.
 - OpenCode uses the documented source-install layout at
   `~/.config/opencode/plugins/openviking` and `openviking.js`; remove the npm
   package entry while the downstream source build is active to avoid duplicate
