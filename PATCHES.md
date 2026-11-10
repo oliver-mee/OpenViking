@@ -1,6 +1,6 @@
-# Patches carried on `deploy`
+# Patches carried on `ome/deploy`
 
-`deploy` is the latest upstream stable release plus the fixes below, one commit
+`ome/deploy` is the latest upstream stable release plus the fixes below, one commit
 per fix. It is the source for the self-hosted server and downstream agent plugin
 bundles. `main` remains an unmodified mirror of `volcengine/OpenViking`.
 
