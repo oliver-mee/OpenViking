@@ -4,7 +4,9 @@
 
 - `main` mirrors `https://github.com/volcengine/OpenViking.git`.
 - `ome/deploy` is based on an upstream stable tag and carries reviewed fixes from
-  [PATCHES.md](PATCHES.md).
+  [PATCHES.md](PATCHES.md). The namespace avoids Codex's marketplace checkout
+  treating a bare `deploy` ref as ambiguous with this repository's `deploy/`
+  directory.
 - Fix branches target upstream `main`; only reviewed commits are cherry-picked
   into `ome/deploy`. Never merge `main` or an upstream feature branch into `ome/deploy`.
 
