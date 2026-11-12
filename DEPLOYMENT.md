@@ -50,14 +50,23 @@ ExecStart=%h/.local/bin/openviking-server --with-bot
 
 ## Client plugins
 
-- Codex uses the `openviking` marketplace from `oliver-mee/OpenViking` ref
+- Claude Code and Codex use the `openviking` marketplace from `oliver-mee/OpenViking` ref
   `ome/deploy`, so the plugin source and server source share the release tag.
 - OpenCode uses the documented source-install layout at
-  `~/.config/opencode/plugins/openviking` and `openviking.js`; remove the npm
-  package entry while the downstream source build is active to avoid duplicate
-  hooks.
-- Restart each host application and verify plugin version, MCP registration and
-  one capture/recall cycle before treating the rollout as complete.
+  `~/.config/opencode/plugins/openviking`. OpenCode v2 discovers that directory
+  directly; omit the forwarding `openviking.js` wrapper and npm package entry
+  to avoid duplicate plugin registration.
+- Install the companion Toolkit core pack before updating these bundles. It owns
+  `openviking-memory`, `openviking-skills`, `ov-experience-memory` and
+  `openviking-rule-search`, plus the resource, troubleshooting and Kanban skills.
+  Claude Code and Codex retain their own `ov-memory-doctor` and local scripts.
+  Hooks, MCP tools and server-stored skill catalogues remain adapter-owned.
+- Update through native marketplace commands. For OpenCode's source install,
+  replace the plugin directory from a qualified complete artifact rather than
+  copying over it, which would retain removed skills. Keep rollback outside the
+  discovered plugins directory.
+- Verify fresh skill discovery, plugin version and MCP registration. Existing
+  sessions may retain loaded prose; do not interrupt them merely to refresh it.
 
 ## Rollback
 

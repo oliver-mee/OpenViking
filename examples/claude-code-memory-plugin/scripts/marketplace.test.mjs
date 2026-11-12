@@ -11,8 +11,6 @@ const repoRoot = resolve(scriptsDir, "..", "..", "..");
 const rootCatalogPath = join(repoRoot, ".claude-plugin", "marketplace.json");
 const localCatalogPath = join(repoRoot, "examples", ".claude-plugin", "marketplace.json");
 const manifestPath = join(pluginDir, ".claude-plugin", "plugin.json");
-const canonicalExperienceSkillPath = join(repoRoot, "examples", "skills", "ov-experience-memory", "SKILL.md");
-const packagedExperienceSkillPath = join(pluginDir, "skills", "ov-experience-memory", "SKILL.md");
 
 const PLUGIN_NAME = "openviking-memory";
 
@@ -28,9 +26,9 @@ test("repo-root Claude marketplace catalog uses git-subdir source", () => {
   assert.ok(entry, `root catalog must contain ${PLUGIN_NAME}`);
   assert.deepEqual(entry.source, {
     source: "git-subdir",
-    url: "https://github.com/volcengine/OpenViking.git",
+    url: "https://github.com/oliver-mee/OpenViking.git",
     path: "examples/claude-code-memory-plugin",
-    ref: "main",
+    ref: "ome/deploy",
   });
 });
 
@@ -46,23 +44,10 @@ test("local Claude marketplace entry name matches plugin manifest", () => {
   assert.equal(entry.source, "./claude-code-memory-plugin");
 });
 
-test("marketplace package ships the canonical Experience skill", () => {
-  assert.ok(existsSync(packagedExperienceSkillPath), "Claude plugin must package the Experience skill");
-  assert.equal(
-    readFileSync(packagedExperienceSkillPath, "utf-8"),
-    readFileSync(canonicalExperienceSkillPath, "utf-8"),
-    "packaged Experience skill must stay byte-identical to examples/skills/ov-experience-memory",
-  );
-});
-
-test("marketplace package ships the canonical OpenViking skills skill", () => {
-  const packaged = join(pluginDir, "skills", "openviking-skills", "SKILL.md");
-  assert.ok(existsSync(packaged), "Claude plugin must package the openviking-skills skill");
-  assert.equal(
-    readFileSync(packaged, "utf-8"),
-    readFileSync(join(repoRoot, "examples", "skills", "openviking-skills", "SKILL.md"), "utf-8"),
-    "packaged skill must stay byte-identical to examples/skills/openviking-skills",
-  );
+test("marketplace package delegates shared skills to the companion pack", () => {
+  for (const name of ["openviking-memory", "openviking-skills", "ov-experience-memory", "openviking-rule-search"]) {
+    assert.equal(existsSync(join(pluginDir, "skills", name, "SKILL.md")), false, name);
+  }
 });
 
 test("Claude .mcp.json starts the stdio MCP proxy", () => {

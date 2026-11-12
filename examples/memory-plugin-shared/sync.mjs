@@ -235,7 +235,11 @@ export const SKILL_TARGETS = [
     dir: join(ROOT, ...path),
     committed: true,
   })),
-];
+].filter(({ dir }) => ![
+  "claude-code-memory-plugin",
+  "codex-memory-plugin",
+  "opencode-plugin",
+].some((host) => dir === join(ROOT, "examples", host, "skills")));
 
 const SOURCE_EXTENSIONS = new Set([".mjs", ".js", ".cjs", ".ts", ".mts"]);
 const SKIPPED_DIRS = new Set(["node_modules", ".git", "dist", "coverage"]);

@@ -63,7 +63,7 @@ The repo ships a Codex marketplace catalog at `.agents/plugins/marketplace.json`
 
 ```bash
 # 1. add the OpenViking marketplace
-codex plugin marketplace add volcengine/OpenViking
+codex plugin marketplace add oliver-mee/OpenViking --ref ome/deploy
 
 # 2. install the plugin from that marketplace
 #    (older Codex builds spell this `codex plugin install`)
@@ -293,7 +293,7 @@ The same builder appends an `<available-skills>` block after `<user-profile>` an
 </openviking-context>
 ```
 
-The catalog has its own budget, `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` or `plugin.codex.skillCatalogTokenBudget` (default `1200`, range `0`–`20000`), and never draws on the profile budget. Every entry keeps its description when that fits; otherwise the catalog lists names only, ending with `... +N more, search OpenViking skills to find the rest` if even the names do not all fit; when not even one name fits, the block shrinks to the single line `<available-skills>N OpenViking skills; search OpenViking skills to find them.</available-skills>`. Set `OPENVIKING_SKILL_CATALOG=0`, `plugin.codex.skillCatalog=false`, or the budget to `0` to leave the catalog out. With no skills, or against a server without `GET /api/v1/skills`, the block is omitted. The bundled `$openviking-skills` skill tells the model how to find a skill, create or replace one with MCP `add_skill`, install one from Git or a local folder, share one to `viking://agent/skills`, and run a one-time migration of local skills that the user asks for and approves skill by skill.
+The catalog has its own budget, `OPENVIKING_SKILL_CATALOG_TOKEN_BUDGET` or `plugin.codex.skillCatalogTokenBudget` (default `1200`, range `0`–`20000`), and never draws on the profile budget. Every entry keeps its description when that fits; otherwise the catalog lists names only, ending with `... +N more, search OpenViking skills to find the rest` if even the names do not all fit; when not even one name fits, the block shrinks to the single line `<available-skills>N OpenViking skills; search OpenViking skills to find them.</available-skills>`. Set `OPENVIKING_SKILL_CATALOG=0`, `plugin.codex.skillCatalog=false`, or the budget to `0` to leave the catalog out. With no skills, or against a server without `GET /api/v1/skills`, the block is omitted. The companion Toolkit core pack supplies `openviking-skills` and the other shared workflows; this plugin retains its local doctor, MCP tools and capture/recall hooks.
 
 On `startup` or `clear`, the script walks every state file except the new session_id and, for each one that still holds a live `ovSessionId` or carries an end marker:
 
@@ -480,9 +480,6 @@ codex-memory-plugin/
 │                                  + SessionEnd + PreCompact (uses Codex's native
 │                                  ${PLUGIN_ROOT} token; no rendering needed on modern Codex)
 ├── skills/
-│   ├── openviking-memory/       # How to use the memory tools
-│   ├── openviking-skills/       # Find, use, create (add_skill), share, and migrate OpenViking skills
-│   ├── ov-experience-memory/
 │   └── ov-memory-doctor/        # Install / config / connection / local-server troubleshooting
 ├── scripts/
 │   ├── cache-heal.mjs           # Links removed older cache versions to the running one

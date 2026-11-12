@@ -26,8 +26,6 @@ const pluginDir = resolve(scriptsDir, "..");
 const repoRoot = resolve(scriptsDir, "..", "..", "..");
 const catalogPath = join(repoRoot, ".agents", "plugins", "marketplace.json");
 const manifestPath = join(pluginDir, ".codex-plugin", "plugin.json");
-const canonicalExperienceSkillPath = join(repoRoot, "examples", "skills", "ov-experience-memory", "SKILL.md");
-const packagedExperienceSkillPath = join(pluginDir, "skills", "ov-experience-memory", "SKILL.md");
 
 const PLUGIN_NAME = "openviking-memory";
 const LEGACY_TOOL_NAMES = ["openviking_recall", "openviking_store", "openviking_forget", "openviking_health"];
@@ -271,9 +269,6 @@ test("required plugin files are present", () => {
     ".codex-plugin/plugin.json",
     ".mcp.json",
     "hooks/hooks.json",
-    "skills/ov-experience-memory/SKILL.md",
-    "skills/openviking-memory/SKILL.md",
-    "skills/openviking-skills/SKILL.md",
     "skills/ov-memory-doctor/SKILL.md",
     "skills/ov-memory-doctor/reference.md",
     "scripts/ov-memory-doctor.mjs",
@@ -283,20 +278,10 @@ test("required plugin files are present", () => {
   }
 });
 
-test("marketplace package ships the canonical Experience skill", () => {
-  assert.equal(
-    readFileSync(packagedExperienceSkillPath, "utf-8"),
-    readFileSync(canonicalExperienceSkillPath, "utf-8"),
-    "packaged Experience skill must stay byte-identical to examples/skills/ov-experience-memory",
-  );
-});
-
-test("marketplace package ships the canonical OpenViking skills skill", () => {
-  assert.equal(
-    readFileSync(join(pluginDir, "skills", "openviking-skills", "SKILL.md"), "utf-8"),
-    readFileSync(join(repoRoot, "examples", "skills", "openviking-skills", "SKILL.md"), "utf-8"),
-    "packaged skill must stay byte-identical to examples/skills/openviking-skills",
-  );
+test("marketplace package delegates shared skills to the companion pack", () => {
+  for (const name of ["openviking-memory", "openviking-skills", "ov-experience-memory", "openviking-rule-search"]) {
+    assert.equal(existsSync(join(pluginDir, "skills", name, "SKILL.md")), false, name);
+  }
 });
 
 test("plugin.json does not describe legacy MCP tool names", () => {
