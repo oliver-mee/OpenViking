@@ -13,6 +13,7 @@ Base: `v0.5.4` (`9dfa9017a8c61abefcd239fe98fdba094a2de7f3`). Fork release:
 | `fix(codex-plugin): keep pre-upgrade sessions' hooks working` | Active Codex threads no longer lose every OpenViking hook when an upgrade removes their versioned plugin cache directory. | [#5986](https://github.com/volcengine/OpenViking/pull/5986) | open |
 | `fix(opencode-plugin): only commit new captures during v2 cleanup` | OpenCode cleanup no longer creates empty server commits for sessions with nothing new since their last commit. | [#5497](https://github.com/volcengine/OpenViking/pull/5497) | open |
 | `fix(opencode-plugin): prefetch recall without blocking prompt admission` | Recall begins during the prompt hook but waits and injects at request context, keeping user-message admission fast and replay stable. | [#5496](https://github.com/volcengine/OpenViking/pull/5496) | open |
+| `chore(plugins): delegate shared skills to companion pack` | The three downstream host bundles retain integration code and local doctors while the companion pack owns shared guidance. The sync target filter prevents duplicate skills returning on rebuild. | downstream packaging policy | carried |
 
 Remove each row when its equivalent lands in a stable upstream release and the
 corresponding tests pass on the upstream implementation.

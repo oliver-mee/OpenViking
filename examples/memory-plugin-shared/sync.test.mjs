@@ -128,6 +128,15 @@ test("vendored skills are byte-identical to examples/skills", async () => {
   }
 });
 
+test("downstream host bundles leave shared skills to the companion pack", async () => {
+  for (const host of ["claude-code-memory-plugin", "codex-memory-plugin", "opencode-plugin"]) {
+    const dir = join(ROOT, "examples", host, "skills");
+    assert.equal(SKILL_TARGETS.some((target) => target.dir === dir), false);
+    const skills = (await findSkillFiles(dir)).map((file) => relative(dir, file));
+    assert.deepEqual(skills, host === "opencode-plugin" ? [] : [join("ov-memory-doctor", "SKILL.md")]);
+  }
+});
+
 // copySkill copies a flat file list; a subdirectory would crash the sync.
 test("synced skills keep a flat file layout", async () => {
   for (const skill of new Set(SKILL_TARGETS.map((target) => target.skill))) {

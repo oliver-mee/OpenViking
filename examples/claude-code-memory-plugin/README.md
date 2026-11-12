@@ -57,11 +57,12 @@ If `ov.conf` is what you already maintain, the plugin reads it too — see [Conf
 **Remote marketplace (recommended)** — no clone needed. The repo root ships a `.claude-plugin/marketplace.json` whose entry fetches this plugin via `git-subdir`:
 
 ```bash
-claude plugin marketplace add https://raw.githubusercontent.com/volcengine/OpenViking/main/.claude-plugin/marketplace.json
+claude plugin marketplace add https://raw.githubusercontent.com/oliver-mee/OpenViking/ome/deploy/.claude-plugin/marketplace.json
 claude plugin install openviking-memory@openviking
 ```
 
-(`claude plugin marketplace add volcengine/OpenViking` works too, but clones the whole repo as the marketplace.)
+Install the companion Toolkit core pack for shared OpenViking skills. This downstream
+marketplace follows `ome/deploy`; the upstream installer is a different distribution.
 
 If you skipped step 2, configure the connection afterwards: write `~/.openviking/ovcli.conf` by hand, run `node <plugin-dir>/scripts/setup.mjs` (an interactive wizard bundled with the plugin), or just run the one-line installer.
 
@@ -232,7 +233,9 @@ Every `SessionStart` (`startup`, `clear`, `resume`, `compact`) injects one `<ope
 </openviking-context>
 ```
 
-The bundled `openviking-skills` skill tells Claude what to do with the catalog: find and use a skill, create, install, or share one with the MCP `add_skill` tool, delete one, and, when you ask, move local skills from `~/.claude/skills` or `<repo>/.claude/skills` into OpenViking. Skills tied to this machine (shipped by a plugin, symlinked in by a CLI installer, or needing a local binary) stay local, and nothing is uploaded until you approve that skill.
+The companion pack's `openviking-skills` skill explains how to find, use, create,
+install and share server-stored skills. The catalogue remains supplied by this
+plugin; shared procedural guidance comes from Toolkit.
 
 #### Lifecycle / behavior / misc
 
@@ -574,9 +577,6 @@ claude-code-memory-plugin/
 ├── commands/
 │   └── ov.md                # /ov status command
 ├── skills/
-│   ├── openviking-memory/   # how to use the memory tools
-│   ├── openviking-skills/   # find, add, share, and migrate OpenViking skills
-│   ├── ov-experience-memory/
 │   └── ov-memory-doctor/    # install / config / connection / local-server troubleshooting
 ├── servers/
 │   └── mcp-proxy.mjs        # stdio -> OpenViking /mcp bridge
