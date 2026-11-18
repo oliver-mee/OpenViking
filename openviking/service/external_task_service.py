@@ -210,7 +210,13 @@ class ExternalTaskService:
                 TaskStatus.CANCELLED,
             }:
                 continue
-            if task.status == TaskStatus.CANCELLING and task.stage in {None, "queued"}:
+            # Queue admission marks a Task RUNNING before target admission. A
+            # rotated, unsubmitted delivery must remain a waiter after restart.
+            # Keep "submitting" reservations: the remote outcome may be unknown.
+            if task.status in {TaskStatus.RUNNING, TaskStatus.CANCELLING} and task.stage in {
+                None,
+                "queued",
+            }:
                 auth = await self._task_auth(task.task_id, task.account_id, task.user_id)
                 if not auth.get("external_task_id"):
                     continue

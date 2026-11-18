@@ -28,3 +28,6 @@ global-exclude .DS_Store
 prune src/build
 
 recursive-include openviking_gateway *.lua
+
+# Server-hosted operational Skills for protocol and tool-only clients
+recursive-include openviking/server/mcp_skills *.md *.yaml

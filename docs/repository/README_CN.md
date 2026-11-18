@@ -124,7 +124,7 @@ OpenViking 0.3.22 的评测覆盖长对话用户记忆（LoCoMo）和多轮智�
 
 ## 快速开始
 
-先准备一个 OpenViking 服务；已经有服务的话，直接跳到[接入你的 Agent](#接入你的-agent)。自部署需要 uv、Python 3.10+，以及一个提供 embedding 模型和 VLM 的模型服务。
+先准备一个 OpenViking 服务；已经有服务的话，直接跳到[接入你的 Agent](#接入你的-agent)。自部署需要 uv、Python 3.11+，以及一个提供 embedding 模型和 VLM 的模型服务。
 
 <details open>
 <summary><strong>让 agent 帮你部署</strong></summary>

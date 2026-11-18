@@ -42,9 +42,10 @@ def _remove_header(request: Request, name: bytes) -> None:
     so downstream middleware and handlers do not see the header.
     """
     scope_headers = request.scope.get("headers", [])
-    request.scope["headers"] = [
-        (key, value) for key, value in scope_headers if key.lower() != name.lower()
-    ]
+    # Update the same ASGI list that an already-materialized Headers object
+    # references. Replacing the list leaves Request.headers with stale identity
+    # assertions even after the raw scope has been sanitized.
+    scope_headers[:] = [(key, value) for key, value in scope_headers if key.lower() != name.lower()]
 
 
 class ApiKeyAuthPlugin(AuthPlugin):
@@ -126,9 +127,7 @@ class ApiKeyAuthPlugin(AuthPlugin):
 
         recorded_fp = record.authorizing_key_fp
         manager = request.app.state.api_key_manager
-        current_fp = await manager.get_user_key_fingerprint(
-            record.account_id, record.user_id
-        )
+        current_fp = await manager.get_user_key_fingerprint(record.account_id, record.user_id)
         if not recorded_fp or not current_fp or not hmac.compare_digest(recorded_fp, current_fp):
             raise UnauthenticatedError(
                 "OAuth token's authorizing API key has been rotated or revoked; "

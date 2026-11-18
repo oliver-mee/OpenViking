@@ -196,7 +196,7 @@
 
 #### 路径 A：普通最小安装
 
-先使用 Python 3.10+ 的虚拟环境，或按[快速开始](02-quickstart.md)用 `uv tool install` 安装。已激活虚拟环境时：
+先使用 Python 3.11+ 的虚拟环境，或按[快速开始](02-quickstart.md)用 `uv tool install` 安装。已激活虚拟环境时：
 
 ```bash
 python -m pip install --upgrade openviking

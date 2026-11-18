@@ -170,7 +170,18 @@ def initialize(
 def test_gateway_capture_commit_and_sender_scoped_recall(
     external_provider, monkeypatch, scope, compress
 ):
+    from inspect import signature
+
     from agent.turn_context import _memory_turn_start_and_prefetch
+
+    # The installed host now passes prior assistant text into turn callbacks.
+    # This fixture has no prior assistant context; support the reviewed older
+    # signature without weakening capture/recall assertions on either host.
+    prefetch_kwargs = (
+        {"previous_message": ""}
+        if "previous_message" in signature(_memory_turn_start_and_prefetch).parameters
+        else {}
+    )
 
     home, provider, _, manager, backend = initialize(
         external_provider, monkeypatch, scope=scope, compress=compress
@@ -187,7 +198,7 @@ def test_gateway_capture_commit_and_sender_scoped_recall(
                 author = {"id": sender, "name": sender, "is_bot": False}
                 query = f"Remember my {sender} drink preference"
                 agent._user_turn_count = index
-                recalled = _memory_turn_start_and_prefetch(agent, query, author)
+                recalled = _memory_turn_start_and_prefetch(agent, query, author, **prefetch_kwargs)
                 assert "common" in recalled
                 if scope == "peer":
                     assert sender in recalled

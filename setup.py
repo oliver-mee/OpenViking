@@ -603,6 +603,8 @@ setup(
             "service/sql/*.sql",
             "service/sql/changes/*.sql",
             "server/static/**/*",
+            "server/mcp_skills/**/*.md",
+            "server/mcp_skills/**/*.yaml",
             "web_studio/dist/**/*",
             "storage/vectordb/engine/*.abi3.so",
             "storage/vectordb/engine/*.pyd",
