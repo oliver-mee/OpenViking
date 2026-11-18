@@ -102,7 +102,7 @@ area first, then mention `@qin-ctx`, `@ZaynJarvis`, or `@zhoujh01`.
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.11+
 - Rust 1.91.1+ for source builds, Rust bindings, and the bundled `ov` CLI
 - Go 1.22+ only for development under `sdk/go`
 - A C++17 compiler: GCC 9+ or Clang 11+

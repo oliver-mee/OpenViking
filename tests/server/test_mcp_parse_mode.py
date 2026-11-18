@@ -12,6 +12,7 @@ from openviking.server import mcp_endpoint
 from openviking.server.identity import RequestContext, Role
 from openviking.server.upload_token_store import upload_token_store
 from openviking_cli.session.user_id import UserIdentifier
+from tests.utils.fastmcp_contract import list_tools as list_fastmcp_tools
 
 
 @pytest.fixture(autouse=True)
@@ -37,7 +38,7 @@ def mcp_context(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_mcp_add_resource_schema_exposes_parse_mode_only_through_args(mcp_context):
-    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    tools = {tool.name: tool for tool in await list_fastmcp_tools(mcp_endpoint.mcp)}
     schema = tools["add_resource"].inputSchema
 
     assert "parse_mode" not in schema["properties"]

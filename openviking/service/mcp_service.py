@@ -12,17 +12,17 @@ import sqlite3
 import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator
 from urllib.parse import urlsplit
 
-import httpx
+import httpx2 as httpx
 import yaml
 from jsonschema import SchemaError, ValidationError, validate
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-from mcp.types import CallToolResult, InitializeResult, Tool
+from mcp.types import CallToolResult, InitializeResult, PaginatedRequestParams, Tool
 
 from openviking.core.namespace import canonical_user_root
 from openviking.core.path_variables import resolve_path_variables
@@ -37,6 +37,7 @@ from openviking_cli.exceptions import (
     ProcessingError,
     UnavailableError,
 )
+from openviking_cli.utils.mcp_logging import redact_mcp_transport_logs
 
 _SERVER_NAME_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _TOOL_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
@@ -73,6 +74,14 @@ class MCPToolMount:
     timeout_seconds: int
     arguments: dict[str, Any]
     tags: list[str] | None
+
+
+def _public_endpoint_url(url: str) -> str:
+    """Keep endpoint metadata recognizable without publishing query credentials."""
+    parsed = urlsplit(url)
+    if not parsed.query:
+        return url
+    return parsed._replace(query="__query_redacted__").geturl()
 
 
 def _now() -> str:
@@ -315,6 +324,7 @@ class MCPService:
             for key, value in server.items()
             if key not in {"header_names", "headers", "tools"}
         } | {
+            "url": _public_endpoint_url(server["url"]),
             "root_uri": tools_root,
             "header_names": sorted(server.get("headers", {})),
             "tool_count": tool_count,
@@ -350,7 +360,7 @@ class MCPService:
         return {
             "kind": "mcp_tool",
             "server": server["name"],
-            "address": server["url"],
+            "address": _public_endpoint_url(server["url"]),
             "revision": MCPService._tool_revision(raw_tool),
             "input_revision": MCPService._input_revision(raw_tool),
             "tool": raw_tool,
@@ -363,26 +373,27 @@ class MCPService:
         headers: dict[str, str],
         timeout_seconds: float = _DEFAULT_TIMEOUT_SECONDS,
     ) -> AsyncIterator[ClientSession]:
-        timeout = httpx.Timeout(timeout_seconds, read=timeout_seconds)
-        try:
-            async with httpx.AsyncClient(headers=headers, timeout=timeout) as http_client:
-                async with streamable_http_client(
-                    server["url"],
-                    http_client=http_client,
-                ) as (read, write, _):
-                    async with ClientSession(
-                        read,
-                        write,
-                        read_timeout_seconds=timedelta(seconds=timeout_seconds),
-                    ) as session:
-                        yield session
-        except (InvalidArgumentError, NotFoundError, UnavailableError):
-            raise
-        except Exception as exc:
-            raise UnavailableError(
-                "MCP server",
-                f"connection failed ({type(exc).__name__}); check endpoint and credentials",
-            ) from exc
+        with redact_mcp_transport_logs():
+            timeout = httpx.Timeout(timeout_seconds, read=timeout_seconds)
+            try:
+                async with httpx.AsyncClient(headers=headers, timeout=timeout) as http_client:
+                    async with streamable_http_client(
+                        server["url"],
+                        http_client=http_client,
+                    ) as (read, write):
+                        async with ClientSession(
+                            read,
+                            write,
+                            read_timeout_seconds=timeout_seconds,
+                        ) as session:
+                            yield session
+            except (InvalidArgumentError, NotFoundError, UnavailableError):
+                raise
+            except Exception as exc:
+                raise UnavailableError(
+                    "MCP server",
+                    f"connection failed ({type(exc).__name__}); check endpoint and credentials",
+                ) from exc
 
     async def _discover(
         self,
@@ -395,9 +406,9 @@ class MCPService:
             cursor: str | None = None
             seen: set[str] = set()
             for _ in range(100):
-                result = await session.list_tools(cursor=cursor)
+                result = await session.list_tools(params=PaginatedRequestParams(cursor=cursor))
                 tools.extend(result.tools)
-                cursor = result.nextCursor
+                cursor = result.next_cursor
                 if not cursor:
                     return initialized, tools
                 if cursor in seen:
@@ -783,7 +794,7 @@ class MCPService:
 
         result = {
             **self._public_server(server, len(tools), tools_root),
-            "protocol_version": initialized.protocolVersion,
+            "protocol_version": initialized.protocol_version,
         }
         if processing is not None:
             result["processing"] = processing
@@ -965,8 +976,8 @@ class MCPService:
         return {
             "name": name,
             "valid": True,
-            "protocol_version": initialized.protocolVersion,
-            "server_info": initialized.serverInfo.model_dump(mode="json"),
+            "protocol_version": initialized.protocol_version,
+            "server_info": initialized.server_info.model_dump(mode="json", by_alias=True),
             "tool_count": len(tools),
         }
 
@@ -1013,6 +1024,9 @@ class MCPService:
                 for tool_name in current_names
                 if tool_name not in existing_tools
                 or existing_tools[tool_name]["revision"] != current_tools[tool_name]["revision"]
+                # Address is public metadata, not part of the tool schema
+                # revision. An explicit sync must also retire old query URLs.
+                or existing_tools[tool_name].get("address") != current_tools[tool_name]["address"]
             )
             await self._publish_catalog(
                 name,
@@ -1040,7 +1054,7 @@ class MCPService:
             "name": name,
             "root_uri": tools_root,
             "synced": True,
-            "protocol_version": initialized.protocolVersion,
+            "protocol_version": initialized.protocol_version,
             "tool_count": len(tools),
             "changes": {
                 "added": added,
@@ -1075,7 +1089,7 @@ class MCPService:
                 "name": name,
                 "root_uri": tools_root,
                 "status": "running",
-                "protocol_version": initialized.protocolVersion,
+                "protocol_version": initialized.protocol_version,
                 "tool_count": len(tools),
             }
         except (InvalidArgumentError, UnavailableError) as exc:
@@ -1779,7 +1793,7 @@ class MCPService:
                 result: CallToolResult = await session.call_tool(
                     tool_name,
                     arguments=arguments,
-                    read_timeout_seconds=timedelta(seconds=timeout_seconds),
+                    read_timeout_seconds=timeout_seconds,
                 )
             except Exception as exc:
                 raise UnavailableError(

@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from mcp.types import CallToolRequest, CallToolRequestParams
 
 import openviking.server.mcp_endpoint as mcp_endpoint
 from openviking.server.identity import RequestContext, Role
@@ -27,11 +26,18 @@ def _set_mcp_identity():
 
 
 async def _call_tool(name: str, arguments: dict) -> dict:
-    handler = mcp_endpoint.mcp._mcp_server.request_handlers[CallToolRequest]
-    request = CallToolRequest(
-        params=CallToolRequestParams(name=name, arguments=arguments),
-    )
-    return (await handler(request)).root.model_dump(by_alias=True, exclude_none=True)
+    from mcp.types import CallToolResult
+
+    from tests.utils.fastmcp_contract import call_tool
+
+    result = await call_tool(mcp_endpoint.mcp, name, arguments)
+    if isinstance(result, tuple):
+        result = CallToolResult(content=result[0], structured_content=result[1])
+    elif isinstance(result, list):
+        result = CallToolResult(content=result)
+    data = result.model_dump(by_alias=True, exclude_none=True)
+    data.pop("resultType", None)
+    return data
 
 
 async def test_whole_call_failure_sets_error_result(monkeypatch):
@@ -124,12 +130,15 @@ async def test_grep_partial_failure_without_matches_stays_partial(monkeypatch):
     direct_result = await mcp_endpoint.grep(**arguments)
     result = await _call_tool("grep", arguments)
 
-    assert direct_result == (
+    expected = (
         "No matches found for successful pattern(s): good\n"
-        "Patterns that could not be searched:\n  bad: RuntimeError: storage offline"
+        "Patterns that could not be searched:\n  bad: INTERNAL:"
     )
+    assert direct_result.startswith(expected)
+    assert "storage offline" not in direct_result
     assert result["isError"] is False
-    assert result["content"] == [{"type": "text", "text": direct_result}]
+    assert result["content"][0]["text"].startswith(expected)
+    assert "storage offline" not in result["content"][0]["text"]
 
 
 async def test_read_all_failures_set_error_result(monkeypatch):
@@ -203,6 +212,24 @@ async def test_health_unavailable_remains_diagnostic_data(monkeypatch):
     result = await _call_tool("health", {})
 
     assert result["isError"] is False
-    assert result["content"] == [
-        {"type": "text", "text": "OpenViking is unhealthy: not initialized"}
-    ]
+    assert result["content"][0]["text"].startswith("OpenViking is unhealthy: INTERNAL:")
+    assert "Reference:" in result["content"][0]["text"]
+    assert "not initialized" not in result["content"][0]["text"]
+
+
+async def test_resource_busy_retains_retryable_conflict_details(monkeypatch):
+    from openviking.storage.errors import ResourceBusyError
+
+    uri = "viking://resources/locked.md"
+    service = SimpleNamespace(
+        fs=SimpleNamespace(
+            write=AsyncMock(side_effect=ResourceBusyError("resource is busy", uri=uri))
+        )
+    )
+    monkeypatch.setattr(mcp_endpoint, "get_service", lambda: service)
+    result = await _call_tool("write", {"uri": uri, "content": "pending"})
+    assert result["isError"] is True
+    error = result["structuredContent"]["error"]
+    assert error["code"] == "CONFLICT"
+    assert error["details"]["uri"] == uri
+    assert error["details"]["retryable"] is True

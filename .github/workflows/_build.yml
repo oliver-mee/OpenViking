@@ -12,7 +12,7 @@ on:
         description: 'JSON string of Python versions'
         required: false
         type: string
-        default: '["3.10"]'
+        default: '["3.11"]'
       build_sdist:
         description: 'Whether to build source distribution'
         required: false
@@ -42,7 +42,7 @@ on:
       python_json:
         description: 'JSON string of Python versions'
         required: false
-        default: '["3.10"]'
+        default: '["3.11"]'
 
 jobs:
   build-studio:
@@ -194,8 +194,6 @@ jobs:
         # Map short version to full version for our specific build environment
         PYTHON_VERSION="${{ matrix.python-version }}"
         case "$PYTHON_VERSION" in
-          "3.9") PYTHON_FULL="3.9.18" ;;
-          "3.10") PYTHON_FULL="3.10.13" ;;
           "3.11") PYTHON_FULL="3.11.8" ;;
           "3.12") PYTHON_FULL="3.12.2" ;;
           "3.13") PYTHON_FULL="3.13.2" ;;

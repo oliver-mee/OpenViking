@@ -440,6 +440,9 @@ async def test_get_session_context_includes_incomplete_archive_messages(
     )
     commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     assert commit_resp.status_code == 200
+    # This archive must finish before the test adds a deliberately incomplete one.
+    task = await _wait_for_task(client, commit_resp.json()["result"]["task_id"])
+    assert task["status"] == "completed"
 
     ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
     session = service.sessions.session(ctx, session_id)
@@ -719,8 +722,7 @@ async def test_auto_created_session_uses_default_policy_when_server_default_enab
     session_resp = await client.get(f"/api/v1/sessions/{session_id}")
     assert session_resp.status_code == 200
     assert (
-        session_resp.json()["result"]["auto_commit_policy"]
-        == AutoCommitPolicy.default().to_dict()
+        session_resp.json()["result"]["auto_commit_policy"] == AutoCommitPolicy.default().to_dict()
     )
 
 

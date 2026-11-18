@@ -4,7 +4,8 @@
 
 Exposes OpenViking tools (filesystem, retrieval, memory, watch management,
 health) to Claude Code (or any MCP client) via streamable HTTP; the
-`@mcp.tool` registrations below are the authoritative list.
+`@_mcp_tool` registrations below are the authoritative domain-tool list.
+Bundled workflow Skills are also served as native resources and resource tools.
 
 Mounted on the FastAPI app at /mcp. The MCP session manager lifecycle is
 tied to the FastAPI app lifespan (not a sub-app lifespan) so the task group
@@ -22,16 +23,23 @@ import dataclasses
 import json
 import os
 import shlex
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from functools import wraps
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from urllib.parse import quote
+from uuid import uuid4
 
-from mcp.server.fastmcp import Context, FastMCP
-from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import (
+from fastmcp import Context, FastMCP
+from fastmcp.server.dependencies import get_context, get_http_request
+from fastmcp.server.middleware.timing import TimingMiddleware
+from fastmcp.server.providers import Provider
+from fastmcp.server.transforms import ResourcesAsTools
+from fastmcp.skills.provider import SkillsDirectoryProvider
+from fastmcp.tools import FunctionTool
+from mcp_types import (
     AudioContent,
     CallToolResult,
     ContentBlock,
@@ -91,6 +99,7 @@ from openviking.server.upload_token_store import download_token_store, upload_to
 from openviking.service.rule_service import RuleSearchRequest
 from openviking.service.skill_sources import GIT_SKILL_SOURCE_PREFIXES
 from openviking.storage.acl import AclSpec
+from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
 from openviking.utils.media_limits import MAX_INLINE_TOOL_RESULT_MEDIA_BYTES
 from openviking.utils.search_filters import (
     SearchContextTypeInput,
@@ -118,6 +127,9 @@ logger = get_logger(__name__)
 
 _mcp_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
     "_mcp_ctx", default=None
+)
+_mcp_http_request: contextvars.ContextVar[Optional[Request]] = contextvars.ContextVar(
+    "_mcp_http_request", default=None
 )
 
 # URL hints from the incoming request, captured by middleware so MCP tools can
@@ -198,7 +210,7 @@ class _IdentityASGIMiddleware:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
 
-        request = Request(scope)
+        request = Request(dict(scope))
         x_api_key = request.headers.get("x-api-key")
         authorization = request.headers.get("authorization")
         try:
@@ -248,11 +260,13 @@ class _IdentityASGIMiddleware:
             "host": request.headers.get("host"),
         }
         ctx_token = _mcp_ctx.set(ctx)
+        request_token = _mcp_http_request.set(request)
         url_token = _request_url_ctx.set(url_info)
         try:
             return await self.app(scope, receive, send)
         finally:
             _mcp_ctx.reset(ctx_token)
+            _mcp_http_request.reset(request_token)
             _request_url_ctx.reset(url_token)
 
 
@@ -260,42 +274,77 @@ class _IdentityASGIMiddleware:
 # MCP server tools (aligned with vikingbot/agent/tools/ov_file.py)
 # ---------------------------------------------------------------------------
 
+
+class _PrivateTimingMiddleware(TimingMiddleware):
+    """Measure requests without logging inputs, results or exception messages."""
+
+    async def on_request(self, context, call_next):
+        started = time.perf_counter()
+        outcome = "ok"
+        try:
+            result = await call_next(context)
+            if getattr(result, "is_error", False):
+                outcome = "tool_error"
+            return result
+        except BaseException:
+            outcome = "failed_or_cancelled"
+            raise
+        finally:
+            logger.info(
+                "MCP %s outcome=%s duration_ms=%.2f",
+                context.method or "unknown",
+                outcome,
+                (time.perf_counter() - started) * 1000,
+            )
+
+
 mcp = FastMCP(
     "openviking",
-    transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
-    stateless_http=True,
+    instructions=(
+        "Use list_resources to discover the built-in OpenViking workflow Skills, "
+        "then read_resource with the returned skill:// URI before unfamiliar "
+        "retrieval, authoring, ingestion, sharing or Skill operations. These are "
+        "server-hosted instructions, not user knowledge. Use find/search and read "
+        "for user knowledge; use add_skill for installed Skills. Read exact sources "
+        "before relying on abstracts. A write acknowledgement is not proof of "
+        "completed indexing. Preserve user/account/peer boundaries and report "
+        "business errors and partial results rather than retrying side effects."
+    ),
+    mask_error_details=True,
+    cache_ttl=None,
+    middleware=[_PrivateTimingMiddleware(logger=logger)],
 )
 
 # Each static profile describes the tool's most consequential supported mode.
 _READ_ONLY_TOOL_ANNOTATIONS = ToolAnnotations(
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
 )
 _LIVE_CONTEXT_READ_TOOL_ANNOTATIONS = ToolAnnotations(
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=True,
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=True,
 )
 _DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=True,
-    idempotentHint=False,
-    openWorldHint=False,
+    read_only_hint=False,
+    destructive_hint=True,
+    idempotent_hint=False,
+    open_world_hint=False,
 )
 _RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=True,
-    idempotentHint=True,
-    openWorldHint=False,
+    read_only_hint=False,
+    destructive_hint=True,
+    idempotent_hint=True,
+    open_world_hint=False,
 )
 _OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS = ToolAnnotations(
-    readOnlyHint=False,
-    destructiveHint=True,
-    idempotentHint=False,
-    openWorldHint=True,
+    read_only_hint=False,
+    destructive_hint=True,
+    idempotent_hint=False,
+    open_world_hint=True,
 )
 
 
@@ -313,48 +362,105 @@ def _mcp_failure(message: str | OpenVikingError) -> _MCPToolFailure:
     return _MCPToolFailure(message)
 
 
-def _mcp_error_results(*, structured_output: bool = True):
-    """Adapt an already registered tool to return explicit MCP errors.
+def _mcp_exception_failure(exc: Exception) -> _MCPToolFailure:
+    """Keep public domain errors, but never disclose unknown exception text.
 
-    Apply this above ``@mcp.tool`` so the literal registration remains the
-    authoritative tool list. Direct Python calls keep the existing return value.
-    The registered MCP handler preserves business error codes and details and
-    converts failures to ``CallToolResult(isError=True)``.
+    Framework masking cannot protect exceptions converted into ordinary tool
+    strings. In particular, parser/network exceptions can contain credentials,
+    URLs or private paths. Correlate unexpected failures with a random identifier
+    without logging the exception message, traceback, arguments or request data.
+    """
+    if isinstance(exc, OpenVikingError):
+        return _mcp_failure(exc)
+    if isinstance(exc, (ResourceBusyError, LockAcquisitionError, AGFSClientError)):
+        mapped = map_exception(exc)
+        if mapped is not None:
+            return _mcp_failure(mapped)
+    error_id = uuid4().hex
+    logger.error(
+        "MCP unexpected failure error_id=%s exception_type=%s",
+        error_id,
+        type(exc).__name__,
+    )
+    return _mcp_failure(
+        OpenVikingError(
+            f"An unexpected server error occurred. Reference: {error_id}",
+            code="INTERNAL",
+            details={"error_id": error_id},
+        )
+    )
+
+
+_registered_tools: list[FunctionTool] = []
+
+
+async def _report_request_progress(*, completed: bool = False, failed: bool = False) -> None:
+    """Send token-bound request milestones, never claim background indexing is done.
+
+    Progress delivery is optional and cannot turn a completed write into a
+    retryable failure. Cancellation still propagates because it is not Exception.
+    """
+    try:
+        context = get_context()
+        await context.report_progress(
+            progress=1 if completed else 0,
+            total=1,
+            message=(
+                "Request failed."
+                if failed
+                else (
+                    "Request completed. Check the result for background processing status."
+                    if completed
+                    else "Request started."
+                )
+            ),
+        )
+    except Exception as exc:
+        logger.debug("MCP progress unavailable (%s)", type(exc).__name__)
+
+
+def _mcp_tool(*, name: str | None = None, annotations=None, structured_output: bool = True):
+    """Register through public FastMCP APIs while preserving OpenViking errors.
+
+    Direct Python callers retain their existing results. The wire handler keeps
+    business error codes, mixed media and upstream MCP results intact. No SDK
+    private tool manager or request-handler map is modified.
     """
 
     def decorator(func):
-        registered_tool = next(
-            (tool for tool in mcp._tool_manager.list_tools() if tool.fn is func), None
-        )
-        if registered_tool is None:
-            raise RuntimeError(f"MCP tool is not registered: {func.__name__}")
-
         @wraps(func)
         async def wire_handler(*args, **kwargs):
+            await _report_request_progress()
             try:
                 result = await func(*args, **kwargs)
-            except OpenVikingError as exc:
-                result = _mcp_failure(exc)
-            if not isinstance(result, _MCPToolFailure):
-                return result
-
-            message = str(result)
-            structured = {"result": message}
-            if result.error is not None:
-                structured["error"] = {
-                    "code": result.error.code,
-                    "message": result.error.message,
-                    "details": result.error.details,
-                }
-            return CallToolResult(
-                content=[TextContent(type="text", text=message)],
-                structuredContent=structured if structured_output else None,
-                isError=True,
+            except Exception as exc:
+                # CancelledError remains a cancellation, never a tool failure.
+                result = _mcp_exception_failure(exc)
+            await _report_request_progress(
+                completed=True,
+                failed=isinstance(result, _MCPToolFailure) or getattr(result, "is_error", False),
             )
+            if isinstance(result, _MCPToolFailure):
+                structured = {"result": str(result)}
+                if result.error is not None:
+                    structured["error"] = {
+                        "code": result.error.code,
+                        "message": result.error.message,
+                        "details": result.error.details,
+                    }
+                return CallToolResult(
+                    content=[TextContent(type="text", text=str(result))],
+                    structured_content=structured if structured_output else None,
+                    is_error=True,
+                )
+            return result
 
-        # Keep the schema and metadata produced by the literal @mcp.tool
-        # registration. Only replace the callable used at the wire boundary.
-        registered_tool.fn = wire_handler
+        options = {} if structured_output else {"output_schema": None}
+        tool = FunctionTool.from_function(
+            wire_handler, name=name, annotations=annotations, **options
+        )
+        _registered_tools.append(tool)
+        mcp.add_tool(tool)
 
         @wraps(func)
         async def direct_handler(*args, **kwargs):
@@ -369,8 +475,7 @@ def _mcp_error_results(*, structured_output: bool = True):
 # -- account directory and resource ACL ------------------------------------
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def list_users(
     context: Context,
     query: str = "",
@@ -389,7 +494,11 @@ async def list_users(
     ctx = _get_ctx()
     if include_credentials and ctx.role not in (Role.USER, Role.ADMIN, Role.ROOT):
         raise PermissionDeniedError("include_credentials requires USER, ADMIN or ROOT role")
-    request = context.request_context.request
+    request = (
+        _mcp_http_request.get()
+        or getattr(getattr(context, "request_context", None), "request", None)
+        or get_http_request()
+    )
     if include_credentials and not should_expose_user_key(request):
         raise PermissionDeniedError("Credential disclosure is disabled in trusted auth mode")
     manager = get_api_key_manager_or_raise(request)
@@ -412,20 +521,24 @@ async def list_users(
     }
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def list_groups(context: Context) -> dict[str, Any]:
     """List group IDs that can be granted resource access in the caller's account.
     Available to all account users; does not disclose group membership.
     """
     ctx = _get_ctx()
-    manager = get_api_key_manager_or_raise(context.request_context.request)
+    manager = get_api_key_manager_or_raise(
+        (
+            _mcp_http_request.get()
+            or getattr(getattr(context, "request_context", None), "request", None)
+            or get_http_request()
+        )
+    )
     groups = await manager.get_groups(ctx.account_id)
     return {"groups": [{"group_id": group["group_id"]} for group in groups]}
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def get_acl(uri: str) -> dict[str, Any]:
     """Read a shared resource's full ACL (direct, inherited, effective grants).
     Requires manage permission on that resource, or account ADMIN role.
@@ -434,8 +547,7 @@ async def get_acl(uri: str) -> dict[str, Any]:
     return await get_service().fs.get_acl(_resolve_mcp_workspace_uri(uri, ctx), ctx=ctx)
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def set_acl(uri: str, acl: AclSpec) -> dict[str, Any]:
     """Set a shared resource's ACL; requires manage permission before the change.
     entries replaces direct grants; omitted entries preserves them. Each entry
@@ -456,8 +568,7 @@ async def set_acl(uri: str, acl: AclSpec) -> dict[str, Any]:
 # -- privacy ---------------------------------------------------------------
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def privacy_tree(
     category: Annotated[
         Optional[str], Field(description="Only list this category, e.g. credential or skill")
@@ -473,8 +584,7 @@ async def privacy_tree(
     return await build_privacy_tree(get_service().privacy_configs, ctx, category)
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def privacy_resolve(
     reference: Annotated[
         str,
@@ -498,8 +608,7 @@ async def privacy_resolve(
     return await resolve_privacy_field(get_service().privacy_configs, ctx, reference)
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def privacy_upsert(
     category: Annotated[str, Field(description="Credential category, e.g. credential or skill")],
     target_key: Annotated[
@@ -541,8 +650,7 @@ async def privacy_upsert(
 # -- find_mcp_tools / invoke_mcp_tool ---------------------------------------------------------
 
 
-@_mcp_error_results(structured_output=False)
-@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS, structured_output=False)
+@_mcp_tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS, structured_output=False)
 async def find_mcp_tools(query: str, limit: int = 10) -> CallToolResult | str:
     """
     Semantically retrieve candidate MCP tools for the user's intent.
@@ -560,12 +668,11 @@ async def find_mcp_tools(query: str, limit: int = 10) -> CallToolResult | str:
     payload = {"tools": tools, "total": len(tools)}
     return CallToolResult(
         content=[TextContent(type="text", text=json.dumps(payload, ensure_ascii=False))],
-        structuredContent=payload,
+        structured_content=payload,
     )
 
 
-@_mcp_error_results(structured_output=False)
-@mcp.tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS, structured_output=False)
+@_mcp_tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS, structured_output=False)
 async def invoke_mcp_tool(
     tool_uri: str,
     arguments: Optional[Dict[str, Any]] = None,
@@ -597,8 +704,7 @@ def _resolve_context_type_filter(
         raise InvalidArgumentError(str(exc)) from exc
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def find(
     query: str,
     target_uri: str = "",
@@ -657,8 +763,7 @@ _MCP_CONTEXT_ONLY_ALIASES = {
 }
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def search(
     query: str,
     search_type: SearchType = "semantic",
@@ -809,8 +914,7 @@ async def search(
     return await _format_search_result(result, service=service, ctx=ctx, read_content=read_content)
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def rule_search(
     task_context: Annotated[str, Field(min_length=1, max_length=64_000)],
     rule_probability_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.65,
@@ -992,7 +1096,7 @@ def _sniff_mcp_image_mime_type(data: bytes) -> Optional[str]:
 
 def _mcp_image_content(data: bytes, mime_type: str) -> ImageContent:
     encoded = base64.b64encode(data).decode("ascii")
-    return ImageContent(type="image", data=encoded, mimeType=mime_type)
+    return ImageContent(type="image", data=encoded, mime_type=mime_type)
 
 
 def _sniff_mcp_audio_mime_type(data: bytes, uri: str) -> Optional[str]:
@@ -1013,7 +1117,7 @@ def _sniff_mcp_audio_mime_type(data: bytes, uri: str) -> Optional[str]:
 
 def _mcp_audio_content(data: bytes, mime_type: str) -> AudioContent:
     encoded = base64.b64encode(data).decode("ascii")
-    return AudioContent(type="audio", data=encoded, mimeType=mime_type)
+    return AudioContent(type="audio", data=encoded, mime_type=mime_type)
 
 
 def _mcp_media_download_hint(uri: str) -> str:
@@ -1026,8 +1130,7 @@ def _mcp_media_download_hint(uri: str) -> str:
     )
 
 
-@_mcp_error_results(structured_output=False)
-@mcp.tool(annotations=_LIVE_CONTEXT_READ_TOOL_ANNOTATIONS, structured_output=False)
+@_mcp_tool(annotations=_LIVE_CONTEXT_READ_TOOL_ANNOTATIONS, structured_output=False)
 async def read(
     uri: Annotated[
         str | list[str] | None,
@@ -1104,8 +1207,8 @@ async def read(
                     ),
                 )
             return resolved_uri, size, None
-        except OpenVikingError as exc:
-            return uri, None, _mcp_failure(exc)
+        except Exception as exc:
+            return uri, None, _mcp_exception_failure(exc)
 
     preflight = await asyncio.gather(*[_preflight_one(uri) for uri in uri_list])
     checked: list[tuple[str, Optional[int], Optional[_MCPToolFailure]]] = []
@@ -1168,8 +1271,8 @@ async def read(
                     if result is not None:
                         return result
                 return content
-            except OpenVikingError as exc:
-                return _mcp_failure(exc)
+            except Exception as exc:
+                return _mcp_exception_failure(exc)
 
     if len(uri_list) == 1:
         result = await _read_one(uri_list[0], checked[0])
@@ -1192,12 +1295,12 @@ async def read(
                 blocks.append(TextContent(type="text", text=result))
             elif isinstance(result, CallToolResult):
                 has_tool_result = True
-                is_error = is_error or result.isError
+                is_error = is_error or result.is_error
                 blocks.extend(result.content)
             else:
                 blocks.append(result)
         if has_tool_result:
-            return CallToolResult(content=blocks, isError=is_error)
+            return CallToolResult(content=blocks, is_error=is_error)
         return blocks
 
     parts = []
@@ -1223,8 +1326,7 @@ def _human_size(size: int) -> str:
     return f"{value:.1f} GB"
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def download(uri: str) -> str:
     """Get a short-lived URL for downloading the original bytes of one file (any type, including PDF, images, archives, audio and video). It does not return the content; use `read` to read text. Fetch the URL with `curl -fL -o <local path> <url>`; no OpenViking API key is needed. The link works once and expires in about 10 minutes; call download again for a new link. Directories are not supported: use `list` or `tree` and download files one at a time."""
     service = get_service()
@@ -1316,8 +1418,7 @@ async def download(uri: str) -> str:
 # -- list ------------------------------------------------------------------
 
 
-@_mcp_error_results()
-@mcp.tool(name="list", annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_mcp_tool(name="list", annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def ls(
     uri: str = "viking://",
     recursive: bool = False,
@@ -1398,8 +1499,7 @@ def _tree_abstract(entry: Dict[str, Any]) -> str:
     return " ".join(abstract.split())
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def tree(
     uri: str = "viking://",
     level_limit: int = 3,
@@ -1478,8 +1578,7 @@ class StoreMessage(BaseModel):
     content: str = Field(description="Message text content")
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def remember(messages: list[StoreMessage]) -> str:
     """Submit information for OpenViking long-term memory extraction. Use when the user says 'remember this', shares preferences, important facts, or decisions worth persisting. Extraction runs in the background and decides which memories to create or update."""
     import uuid
@@ -1514,8 +1613,7 @@ async def remember(messages: list[StoreMessage]) -> str:
 # -- write -----------------------------------------------------------------
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def write(
     uri: str,
     content: str,
@@ -1566,8 +1664,7 @@ async def write(
     return message + _indexing_hint(result)
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def edit(
     uri: str,
     old_string: str,
@@ -1594,10 +1691,12 @@ async def edit(
         raise InvalidArgumentError("old_string must not be empty")
     try:
         current = await service.fs.read_visible(uri, ctx=ctx)
-    except (InvalidArgumentError, PermissionDeniedError, UnauthenticatedError):
+    except OpenVikingError:
         raise
-    except Exception as exc:
+    except (AGFSNotFoundError, FileNotFoundError) as exc:
         raise NotFoundError(uri, "file") from exc
+    except Exception as exc:
+        return _mcp_exception_failure(exc)
     occurrences = current.count(old_string)
     if occurrences == 0:
         hint = ""
@@ -1748,8 +1847,7 @@ def _resource_add_error(result: Any) -> _MCPToolFailure | None:
     return _mcp_failure(f"Error adding resource: {detail}")
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def add_resource(
     path: str = "",
     temp_file_id: str = "",
@@ -1905,7 +2003,7 @@ async def add_resource(
         except OpenVikingError as exc:
             return _mcp_failure(exc)
         except Exception as exc:
-            return _mcp_failure(f"Error adding resource: {exc}")
+            return _mcp_exception_failure(exc)
         error = _resource_add_error(result)
         if error is not None:
             return error
@@ -1958,7 +2056,7 @@ async def add_resource(
         except OpenVikingError as exc:
             return _mcp_failure(exc)
         except Exception as exc:
-            return _mcp_failure(f"Error adding resource: {exc}")
+            return _mcp_exception_failure(exc)
         error = _resource_add_error(result)
         if error is not None:
             return error
@@ -2077,8 +2175,7 @@ def _format_skill_install_result(result: Dict[str, Any], *, list_only: bool) -> 
     return "\n".join(lines)
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_OPEN_WORLD_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def add_skill(
     data: str = "",
     path: str = "",
@@ -2167,7 +2264,7 @@ async def add_skill(
         except OpenVikingError as exc:
             return _mcp_failure(exc)
         except Exception as exc:
-            return _mcp_failure(f"Error adding skill: {exc}")
+            return _mcp_exception_failure(exc)
         return _format_skill_install_result(result, list_only=list_only)
 
     server_config = get_server_config()
@@ -2247,8 +2344,7 @@ async def add_skill(
 # `resume`, `trigger`, `update --interval`, etc.) for those operations.
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def list_watches() -> str:
     """List watch tasks (auto-refresh subscriptions) visible to the current user."""
     service = get_service()
@@ -2277,8 +2373,7 @@ async def list_watches() -> str:
     return "\n".join(lines)
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def cancel_watch(to_uri: str) -> str:
     """Cancel a watch task by its target URI (e.g. "viking://resources/volcengine/OpenViking")."""
     from openviking.resource import watch_manager as _wm_mod
@@ -2318,8 +2413,7 @@ async def cancel_watch(to_uri: str) -> str:
 # -- grep ------------------------------------------------------------------
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def grep(
     uri: str, pattern: str | list[str], case_insensitive: bool = False, node_limit: int = 10
 ) -> str:
@@ -2349,8 +2443,7 @@ async def grep(
                 # miss, so carry the reason instead of dropping it. POST /search/grep maps
                 # and re-raises these; reporting them is what keeps the two faces agreeing
                 # about whether a failure is a result.
-                code = exc.code if isinstance(exc, OpenVikingError) else type(exc).__name__
-                return (p, [], f"{code}: {exc}")
+                return (p, [], str(_mcp_exception_failure(exc)))
 
     results = await asyncio.gather(*[_grep_one(p) for p in patterns])
 
@@ -2393,8 +2486,7 @@ async def grep(
 # -- glob ------------------------------------------------------------------
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> str:
     """Find viking:// files matching a glob pattern (e.g. **/*.md, *.py). Use this for filename matching; use the search tool for content-based retrieval."""
     service = get_service()
@@ -2405,8 +2497,8 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
         result = await service.fs.glob(pattern, ctx=ctx, uri=resolved_uri, node_limit=node_limit)
     except OpenVikingError as exc:
         return _mcp_failure(exc)
-    except Exception as e:
-        return _mcp_failure(f"Error: {e}")
+    except Exception as exc:
+        return _mcp_exception_failure(exc)
 
     matches = result.get("matches", [])
     if not matches:
@@ -2422,8 +2514,7 @@ async def glob(pattern: str, uri: str = "viking://", node_limit: int = 100) -> s
 # -- forget ----------------------------------------------------------------
 
 
-@_mcp_error_results()
-@mcp.tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_RETRY_SAFE_DESTRUCTIVE_TOOL_ANNOTATIONS)
 async def forget(uri: str, recursive: bool = False) -> str:
     """Permanently delete a viking:// URI from OpenViking. Irreversible — confirm with user before calling.
 
@@ -2439,14 +2530,14 @@ async def forget(uri: str, recursive: bool = False) -> str:
 # -- health ----------------------------------------------------------------
 
 
-@mcp.tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
+@_mcp_tool(annotations=_READ_ONLY_TOOL_ANNOTATIONS)
 async def health() -> str:
     """Check whether the OpenViking server is healthy."""
     try:
         service = get_service()
         return f"OpenViking is healthy (service initialized, storage: {type(service.viking_fs).__name__})"
-    except Exception as e:
-        return f"OpenViking is unhealthy: {e}"
+    except Exception as exc:
+        return f"OpenViking is unhealthy: {_mcp_exception_failure(exc)}"
 
 
 # ---------------------------------------------------------------------------
@@ -2538,7 +2629,7 @@ _PORTABLE_PROPERTY_OVERRIDES = {
 
 
 def _apply_portable_schemas() -> None:
-    for tool in mcp._tool_manager.list_tools():
+    for tool in _registered_tools:
         tool.parameters = _portable_schema(tool.parameters)
         properties = tool.parameters.get("properties", {})
         for name, override in _PORTABLE_PROPERTY_OVERRIDES.get(tool.name, {}).items():
@@ -2553,23 +2644,56 @@ _apply_portable_schemas()
 # ---------------------------------------------------------------------------
 
 
+# Bundled guides have one source and are available both through protocol
+# resources/Skills and through ordinary tools for tool-only clients.
+_SKILLS_ROOT = Path(__file__).with_name("mcp_skills")
+
+
+class _ResourceToolsProvider(Provider):
+    """Expose FastMCP's own resource tools without a server-level transform.
+
+    FastMCP 4.2 suppresses native Skills discovery when any server transform
+    is present. A provider containing the exact standard transform-generated
+    tools preserves both interfaces. Runtime reads still use ctx.fastmcp and
+    therefore the same middleware and visibility checks; nothing is copied.
+    """
+
+    def __init__(self, server: FastMCP):
+        super().__init__()
+        self.transform = ResourcesAsTools(server)
+
+    async def _list_tools(self):
+        return await self.transform.list_tools(())
+
+    async def _get_tool(self, name, version=None):
+        async def missing(_name, *, version=None):
+            return None
+
+        return await self.transform.get_tool(name, missing, version=version)
+
+
+mcp.add_provider(SkillsDirectoryProvider(_SKILLS_ROOT))
+mcp.add_provider(_ResourceToolsProvider(mcp))
+_mcp_http_app = None
+
+
+def _get_mcp_http_app():
+    global _mcp_http_app
+    if _mcp_http_app is None:
+        _mcp_http_app = mcp.http_app(path="/mcp", stateless_http=True)
+    return _mcp_http_app
+
+
 @asynccontextmanager
 async def mcp_lifespan():
-    """Run the MCP session manager. Call this inside the FastAPI lifespan."""
-    async with mcp.session_manager.run():
-        tools = mcp._tool_manager.list_tools()
-        logger.info(
-            "MCP endpoint ready (%d tools: %s)", len(tools), ", ".join(tool.name for tool in tools)
-        )
+    """Own FastMCP's complete lifespan within OpenViking's parent lifespan."""
+    app = _get_mcp_http_app()
+    async with app.router.lifespan_context(app):
+        tools = await mcp.list_tools()
+        logger.info("FastMCP endpoint ready (%d tools)", len(tools))
         yield
 
 
 def create_mcp_app() -> ASGIApp:
-    """Create the MCP ASGI app with identity middleware.
-
-    IMPORTANT: call `mcp_lifespan()` inside the FastAPI lifespan BEFORE
-    serving requests. The session manager task group must be initialized.
-    """
-    starlette_app = mcp.streamable_http_app()
-    handler = starlette_app.routes[0].app
-    return _IdentityASGIMiddleware(handler)
+    """Authenticate with existing OpenViking auth before every MCP operation."""
+    return _IdentityASGIMiddleware(_get_mcp_http_app())
