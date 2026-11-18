@@ -4,7 +4,7 @@ import { effectivePeerId, fetchJSON, log } from "./utils.mjs"
 
 export function createMemoryRecall({ config, sessionManager }) {
   let compressor = null
-  async function buildRelevantMemories(input, parts) {
+  async function buildRelevantMemories(input, parts, { deadline } = {}) {
     if (!isRecallEnabled(config)) return
     const query = extractCurrentUserText(parts ?? [])
     if (!query) return
@@ -15,7 +15,7 @@ export function createMemoryRecall({ config, sessionManager }) {
       cwd: input.directory ?? input.cwd,
     })) return
 
-    const compression = sessionID ? compressor?.forSession(sessionID) : null
+    const compression = sessionID ? compressor?.forSession(sessionID, { deadline }) : null
     try {
       const health = await fetchJSON(config, "/health", {}, { timeoutMs: 5000 })
       if (!health.ok || compression?.signal.aborted) return

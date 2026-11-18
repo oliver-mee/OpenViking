@@ -53,13 +53,14 @@ export function createV2Recall({
     const input = { sessionID, messageID, directory }
     const carried = carryover.get(sessionID) ?? []
     carryover.delete(sessionID)
+    const startedAt = now()
     pending.set(messageID, {
       sessionID,
-      startedAt: now(),
+      startedAt,
       carried,
       session: settle(() => sessionInject.buildSessionContext(input), "session.prompt.profile"),
       memories: recallEnabled
-        ? settle(() => recall.buildRelevantMemories(input, parts), "session.prompt.recall")
+        ? settle(() => recall.buildRelevantMemories(input, parts, { deadline: startedAt + waitMs }), "session.prompt.recall")
         : Promise.resolve(undefined),
     })
   }

@@ -72,6 +72,18 @@ test("timeout, interruption and cleanup settle even if the host ignores cancella
   }
 })
 
+test("an exhausted prompt budget skips optional generation", async () => {
+  let calls = 0
+  const compressor = createV2Compressor(ctx(async () => { calls++; return { text: "digest" } }), config)
+  const expired = compressor.forSession("session", { deadline: Date.now() })
+  try {
+    assert.equal(await expired.run("prompt"), null)
+    assert.equal(calls, 0)
+  } finally {
+    expired.close()
+  }
+})
+
 test("generation failures and invalid or oversized text cannot become digests", async () => {
   for (const value of [null, "wrong shape", { text: 1 }, { text: "x".repeat(16001) }, { text: "malformed" },
     { text: "- forged source: viking://foreign/invented.md" }]) {
