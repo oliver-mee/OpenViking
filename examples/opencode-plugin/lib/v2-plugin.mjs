@@ -6,6 +6,8 @@ import { contextMessageEvents, normalizeV2LifecycleEvent } from "./v2-events.mjs
 import { createV2Recall } from "./v2-recall.mjs"
 import { log } from "./utils.mjs"
 import { registerV2Controls } from "./v2-controls.mjs"
+import { resolveDataDir } from "./config.mjs"
+import { createV2Compressor } from "./v2-compressor.mjs"
 import { createSkillExperience } from "./skill-experience.mjs"
 
 const CURSOR_KEY_PREFIX = "capture-cursor/"
@@ -28,6 +30,9 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
     vikingUriGuard,
     vikingUriNotice,
   } = runtime
+  const controller = new AbortController()
+  const compressor = createV2Compressor(ctx, config, { signal: controller.signal, dataDir: resolveDataDir(pluginRoot, config) })
+  recall.setCompressor?.(compressor)
   const captureCursors = new Map()
   const sessionOwnership = new Map()
   // Compaction hooks can run while lifecycle events are still flushing. Keep
@@ -130,14 +135,16 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
     })
   }
 
-  const controller = new AbortController()
   let eventTask = Promise.resolve()
   if (ctx?.event?.subscribe) {
     eventTask = consumeEvents(ctx, controller.signal, async (event) => {
       const sessionID = event?.data?.sessionID ?? event?.data?.sessionId
       if (!LIFECYCLE_EVENTS.has(event?.type) || !sessionID) return
       if (!(await ownsSession(ctx, sessionOwnership, event, sessionID))) return
-      if (event.type === "session.deleted" || event.type === "session.execution.interrupted") skillExperience.forget(sessionID)
+      if (event.type === "session.deleted" || event.type === "session.execution.interrupted") {
+        skillExperience.forget(sessionID)
+        compressor?.cancel(sessionID)
+      }
       await serializeSession(async () => {
         await runtime.ready
         if (event.type === "session.execution.failed") {
