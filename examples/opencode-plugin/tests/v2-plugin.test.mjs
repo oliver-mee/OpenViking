@@ -1,11 +1,23 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { fileURLToPath } from "node:url"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { captureV2Context, injectV2Context, prepareV2Prompt, startV2Plugin } from "../lib/v2-plugin.mjs"
 import { createVikingUriNotice } from "../lib/viking-uri-guard.mjs"
 
-const pluginRoot = fileURLToPath(new URL("..", import.meta.url))
 const BUNDLED_SKILLS = ["openviking-memory", "openviking-rule-search", "openviking-skills", "ov-experience-memory"]
+
+async function skillFixture(t) {
+  const root = await mkdtemp(join(tmpdir(), "ov-opencode-bundled-"))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  for (const name of BUNDLED_SKILLS) {
+    const directory = join(root, "skills", name)
+    await mkdir(directory, { recursive: true })
+    await writeFile(join(directory, "SKILL.md"), `---\nname: ${name}\ndescription: A synthetic bundled skill for the editor tests.\n---\n\n# Fixture\n`)
+  }
+  return root
+}
 
 function runtimeFixture(overrides = {}) {
   const events = []
@@ -65,10 +77,10 @@ function contextFixture(messages = []) {
   }
 }
 
-test("startV2Plugin registers direct MCP tools and all v2 hooks", async () => {
+test("startV2Plugin registers direct MCP tools and all v2 hooks", async (t) => {
   const { runtime } = runtimeFixture()
   const { ctx, hooks, registered, skillSources } = contextFixture()
-  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot })
+  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot: await skillFixture(t) })
 
   assert.deepEqual(skillSources.map((skill) => skill.id).sort(), BUNDLED_SKILLS)
   for (const skill of skillSources) {
@@ -83,13 +95,13 @@ test("startV2Plugin registers direct MCP tools and all v2 hooks", async () => {
 })
 
 for (const disabled of [false, true]) {
-  test(`bundled skills follow MCP registration when transforms run after setup, disabled=${disabled}`, async () => {
+  test(`bundled skills follow MCP registration when transforms run after setup, disabled=${disabled}`, async (t) => {
     const { runtime } = runtimeFixture()
     const { ctx } = contextFixture()
     const transforms = []
     ctx.mcp.transform = async (callback) => { transforms.push(callback) }
     ctx.skill.transform = async (callback) => { transforms.push(callback) }
-    const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot })
+    const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot: await skillFixture(t) })
     const [mcp, skill] = transforms
     const skills = new Map()
     mcp({ get: () => (disabled ? { disabled: true } : undefined), set: () => {} })
@@ -99,14 +111,14 @@ for (const disabled of [false, true]) {
   })
 }
 
-test("existing skills override bundled skills by ID or name", async () => {
+test("existing skills override bundled skills by ID or name", async (t) => {
   const { runtime } = runtimeFixture()
   const { ctx, skillSources } = contextFixture()
   skillSources.push(
     { id: "project-memory", name: "openviking-memory", path: "/tmp/project/.opencode/skills/project-memory/SKILL.md", content: "" },
     { id: "openviking-skills", name: "Custom skills", path: "/tmp/project/.opencode/skills/openviking-skills/SKILL.md", content: "" },
   )
-  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot })
+  const cleanup = await startV2Plugin(ctx, runtime, { pluginRoot: await skillFixture(t) })
   assert.deepEqual(skillSources.map((skill) => skill.id).sort(), [
     "openviking-rule-search",
     "openviking-skills",

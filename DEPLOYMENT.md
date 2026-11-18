@@ -16,14 +16,14 @@ Build from a clean archive of the release tag. OpenViking's SCM tag parser only
 accepts numeric upstream tags, so set the fork package version explicitly:
 
 ```bash
-SETUPTOOLS_SCM_PRETEND_VERSION=0.5.4+ome.1 uv build --wheel
+SETUPTOOLS_SCM_PRETEND_VERSION=0.5.5+ome.1 uv build --wheel
 ```
 
 Store the wheel, an exact requirements export, checksums and deployment metadata
 under:
 
 ```text
-~/.local/share/openviking/releases/0.5.4+ome.1/
+~/.local/share/openviking/releases/0.5.5+ome.1/
 ```
 
 The package requires the `bot` extra and a Linux ARM64 native build. Run the
@@ -32,11 +32,16 @@ version gate before promoting the artifact.
 
 ## Server update
 
+Staged qualification must compare the old and new Gateway tool inventories.
+If a profile previously relied on the built-in write exclusions, explicitly
+preserve those exclusions before deploying v0.5.5. Preserve existing backend
+choices, check for partial imports, and budget for first-use index backfill.
+
 1. Confirm no pending or running ingestion tasks.
 2. Back up the complete workspace, OpenViking config, systemd user unit and the
    current uv tool environment.
-3. Stop `openviking.service`. Version 0.5.4 changes the shared lock protocol, so
-   all lock participants must stop before installation.
+3. Stop `openviking.service`. Stop any other participants that write to the same
+   workspace before installation. Keep isolated canaries on their own workspace.
 4. Install the qualified wheel and exact dependency set into the versioned uv
    tool environment.
 5. Start `openviking.service` and verify the running version, process identity,
@@ -71,5 +76,4 @@ ExecStart=%h/.local/bin/openviking-server --with-bot
 ## Rollback
 
 Stop the service, restore the prior uv tool environment and client plugin
-configuration. If 0.5.4 migrations ran, restore the pre-upgrade workspace before
-starting the previous server. Do not run old and new lock participants together.
+configuration. If migrations ran, restore the pre-upgrade workspace before starting the previous server. Do not run old and new lock participants together.
