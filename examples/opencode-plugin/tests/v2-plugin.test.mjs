@@ -194,13 +194,19 @@ test("cleanup waits for background initialization before flushing", async () => 
   assert.equal(flushed, true)
 })
 
-test("cleanup commits only sessions with new messages", async () => {
+test("cleanup commits only sessions with new messages in its own location", async () => {
   const flushes = []
   const { runtime } = runtimeFixture()
   runtime.sessionManager.flushAll = async (options) => { flushes.push(options) }
   const { ctx } = contextFixture()
+  ctx.session.get = async ({ sessionID }) => ({ location: sessionID === "local" ? ctx.location : sessionID === "foreign" ? { directory: "/elsewhere" } : undefined })
   await (await startV2Plugin(ctx, runtime, { pluginRoot: "/tmp/ov" }))()
-  assert.deepEqual(flushes, [{ commit: true, onlyIfUncommitted: true }])
+  assert.equal(flushes.length, 1)
+  const { includesSession, ...options } = flushes[0]
+  assert.deepEqual(options, { commit: true, onlyIfUncommitted: true })
+  assert.equal(await includesSession("local"), true)
+  assert.equal(await includesSession("foreign"), false)
+  assert.equal(await includesSession("unknown"), false)
 })
 
 test("captureV2Context advances a per-session cursor and preserves tool parts", async () => {

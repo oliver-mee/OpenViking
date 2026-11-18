@@ -19,10 +19,12 @@ Base: `v0.5.5` (`4f4b09c8b81cc52cc0361ec7d9f189ce0ccda35b`). Fork release:
 | OpenCode V2 experience hints and context assistance | Optional skill experience hints, citation-preserving recall compression with raw fallback, and archive references during native compaction. | [#7909](https://github.com/volcengine/OpenViking/pull/7909), [#7912](https://github.com/volcengine/OpenViking/pull/7912), [#7913](https://github.com/volcengine/OpenViking/pull/7913), [#5727](https://github.com/volcengine/OpenViking/pull/5727) | drafts and citation prerequisite |
 | Forward OpenCode recall exclusions | Carry the configured exclusions into the context-search request. | [#6850](https://github.com/volcengine/OpenViking/pull/6850) | open |
 | `chore(plugins): delegate shared skills to companion pack` | The three downstream host bundles retain integration code and local doctors while the companion pack owns shared guidance. The sync target filter prevents duplicate skills returning on rebuild. | downstream packaging policy | carried |
+| Harden OpenCode V2 controls and session handling | The native picker preserves drafts and has no permanent badge. Doctor cancels, saved recall shows the latest turns first, unused skill hint budgets are refunded, and recall and cleanup respect session teardown and location. Compression and archive assistance remain opt-in. | [#5496](https://github.com/volcengine/OpenViking/pull/5496), [#5497](https://github.com/volcengine/OpenViking/pull/5497), [#7909](https://github.com/volcengine/OpenViking/pull/7909), [#7910–#7913](https://github.com/volcengine/OpenViking/issues/5494) | carried |
 
 Remove each row when its equivalent lands in a stable upstream release and the
 corresponding tests pass on the upstream implementation.
 
 The server wheel excludes `examples/`, so the Codex and OpenCode fixes are
-deployed as separate plugin artifacts from this same tag. Hermes already has a
+deployed as separate plugin artifacts. The OpenCode follow-up is versioned
+`0.5.30-ome.2` on this branch without changing the server wheel. Hermes already has a
 native OpenViking provider and is not changed by this deployment.
