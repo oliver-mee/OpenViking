@@ -247,6 +247,21 @@ timed out compression falls back to raw recall, with limits on wait, input,
 and accepted digest length. The API does not expose a provider-side output
 limit or report usage. The original chat transcript is unaffected.
 
+### Optional OpenViking reference for compaction (OpenCode v2)
+
+Set `plugin.opencode.takeoverEnabled` to `true` to let OpenViking supplement
+OpenCode's normal compaction. When the host asks for a summary, the plugin
+captures eligible messages from that session, commits them, and waits briefly
+for a completed OpenViking archive. It may add a bounded excerpt from the
+archive overview to the host's summary prompt. OpenCode still writes the
+summary using its own transcript and tools.
+
+Use capture-enabled sessions on a server that reports completed archives.
+Excluded sessions, incomplete archives, errors, and timeouts leave the native
+summary request unchanged. This option is off by default. It can cause an
+OpenViking commit earlier than usual, with the server's configured extraction
+and provider usage, even if no completed overview is ready in time.
+
 ## MCP Tools
 
 OpenCode sees the OpenViking MCP server as `openviking`, so tool names are namespaced with `openviking_`.

@@ -9,6 +9,7 @@ import { registerV2Controls } from "./v2-controls.mjs"
 import { resolveDataDir } from "./config.mjs"
 import { createV2Compressor } from "./v2-compressor.mjs"
 import { createSkillExperience } from "./skill-experience.mjs"
+import { createV2Compaction } from "./v2-compaction.mjs"
 
 const CURSOR_KEY_PREFIX = "capture-cursor/"
 const LIFECYCLE_EVENTS = new Set([
@@ -52,6 +53,17 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
     sessionInject,
     directory,
     recallEnabled: isRecallEnabled(config),
+  })
+
+  const compaction = createV2Compaction(ctx, config, sessionManager, {
+    signal: controller.signal,
+    captureAndCommit: (sessionID, expected, signal) => serializeSession(async () => {
+      signal.throwIfAborted()
+      await captureV2Context(ctx, sessionManager, captureCursors, sessionID, { signal })
+      if (sessionManager.getMappedSessionId(sessionID) === expected) {
+        return sessionManager.commitCurrentSession(sessionID, signal)
+      }
+    }),
   })
 
   await registerV2Controls(ctx, runtime, {
@@ -126,9 +138,12 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
     await ctx.session.hook("compaction", async (event) => {
       try {
         await runtime.ready
-        // context() drops the old transcript as soon as compaction completes.
-        // Capture it now; the ended event below owns the commit.
-        await serializeSession(() => captureV2Context(ctx, sessionManager, captureCursors, event.sessionID))
+        if (compaction.enabledFor(event)) {
+          await compaction.assist(event)
+        } else {
+          // Capture before context() drops the pre-compaction transcript.
+          await serializeSession(() => captureV2Context(ctx, sessionManager, captureCursors, event.sessionID))
+        }
       } catch (error) {
         logHookError("session.compaction.capture", error)
       }
@@ -140,6 +155,7 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
     eventTask = consumeEvents(ctx, controller.signal, async (event) => {
       const sessionID = event?.data?.sessionID ?? event?.data?.sessionId
       if (!LIFECYCLE_EVENTS.has(event?.type) || !sessionID) return
+      if (event.type === "session.deleted" || event.type === "session.execution.interrupted") compaction.cancel(sessionID)
       if (!(await ownsSession(ctx, sessionOwnership, event, sessionID))) return
       if (event.type === "session.deleted" || event.type === "session.execution.interrupted") {
         skillExperience.forget(sessionID)
