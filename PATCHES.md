@@ -24,7 +24,9 @@ Base: `v0.5.5` (`4f4b09c8b81cc52cc0361ec7d9f189ce0ccda35b`). Fork release:
 Remove each row when its equivalent lands in a stable upstream release and the
 corresponding tests pass on the upstream implementation.
 
-The server wheel excludes `examples/`, so the Codex and OpenCode fixes are
-deployed as separate plugin artifacts. The OpenCode follow-up is versioned
-`0.5.30-ome.2` on this branch without changing the server wheel. Hermes already has a
+The server wheel excludes `examples/`, so the plugins update independently.
+OpenCode `0.5.30-ome.3` installs directly from the `examples/opencode-plugin`
+directory on this branch. Run `node examples/memory-plugin-shared/sync.mjs`
+and commit its output when shared runtime inputs change, as for Claude and
+Codex. No install-time generation is needed. Hermes already has a
 native OpenViking provider and is not changed by this deployment.

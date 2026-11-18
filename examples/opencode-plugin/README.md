@@ -78,6 +78,16 @@ curl -fsSL https://openviking.ai/install | bash
 
 The installer copies the plugin into `~/.config/opencode/plugins/` as a local file plugin, writes the `openviking` MCP server entry into `~/.config/opencode/opencode.json`, and configures `~/.openviking/ovcli.conf`.
 
+### Git Package (`ome/deploy`, OpenCode V2)
+
+For the downstream fork, use OpenCode's native package installer:
+
+```bash
+opencode plugin add 'github:oliver-mee/OpenViking#ome/deploy::path:examples/opencode-plugin'
+```
+
+Use `opencode plugin update` to pull new versions. Keep your existing `~/.openviking/ovcli.conf`. If switching from a local install, move the old `plugins/openviking/` directory and any `plugins/openviking.js` wrapper out of the OpenCode plugin discovery directory so only the Git package loads.
+
 ### Published Package
 
 To enable it through OpenCode's package plugin mechanism instead:
@@ -107,7 +117,7 @@ cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 ```
 
-`sync.mjs` generates `lib/shared/`, the shared modules the plugin and its MCP proxy import. That directory is not in git, so run it before copying, and again after every `git pull`.
+`sync.mjs` generates `lib/shared/`, which the plugin and its MCP proxy import. The downstream `ome/deploy` branch tracks those files for Git installs. Regenerate them before committing changes to shared code or to the plugin's shared imports.
 
 This creates a stable OpenCode plugin layout:
 

@@ -1,6 +1,6 @@
 {
   "name": "@openviking/opencode-plugin",
-  "version": "0.5.30-ome.2",
+  "version": "0.5.30-ome.3",
   "author": "@openviking",
   "description": "Unified OpenCode plugin for OpenViking repository retrieval and long-term memory",
   "type": "module",
@@ -26,7 +26,7 @@
     "INSTALL-ZH.md"
   ],
   "scripts": {
-    "prepack": "node ../memory-plugin-shared/sync.mjs",
+    "sync:shared": "node ../memory-plugin-shared/sync.mjs",
     "check": "node --check index.mjs && node --check lib/config.mjs && node --check lib/controls-contract.mjs && node --check lib/diagnostics.mjs && node --check lib/mcp-config.mjs && node --check lib/memory-recall.mjs && node --check lib/memory-session.mjs && node --check lib/plugin-runtime.mjs && node --check lib/repo-context.mjs && node --check lib/runtime.mjs && node --check lib/session-inject.mjs && node --check lib/skill-experience.mjs && node --check lib/tui-controls.mjs && node --check lib/utils.mjs && node --check lib/v2-compaction.mjs && node --check lib/v2-compressor.mjs && node --check lib/v2-controls.mjs && node --check lib/v2-events.mjs && node --check lib/v2-plugin.mjs && node --check lib/v2-recall-inspector.mjs && node --check lib/v2-recall.mjs && node --check lib/viking-uri-guard.mjs && node --check scripts/ov-memory-doctor.mjs && node --check servers/mcp-proxy.mjs && node --check scripts/setup.mjs && node --check tests/*.test.mjs",
     "test": "node --test tests/*.test.mjs",
     "check:tui": "node scripts/check-tui.mjs"

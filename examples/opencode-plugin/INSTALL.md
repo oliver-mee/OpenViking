@@ -69,7 +69,7 @@ cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 ```
 
-`sync.mjs` generates `lib/shared/`, the shared modules the plugin and its MCP proxy import. That directory is not in git, so run it before copying, and again after every `git pull`.
+`sync.mjs` generates `lib/shared/`, the shared modules the plugin and its MCP proxy import. The downstream `ome/deploy` branch tracks those files and supports [native Git installation](README.md#git-package-omedeploy-opencode-v2) in OpenCode V2.
 
 After installation, the layout should look like this:
 

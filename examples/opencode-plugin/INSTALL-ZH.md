@@ -69,7 +69,7 @@ cp -r examples/opencode-plugin/lib ~/.config/opencode/plugins/openviking/
 cp -r examples/opencode-plugin/servers ~/.config/opencode/plugins/openviking/
 ```
 
-`sync.mjs` 会生成 `lib/shared/`，插件和 MCP 代理都从这里 import 共享模块。这个目录不在 git 里，所以复制前要先运行；之后每次 `git pull` 也要重新运行再复制。
+`sync.mjs` 会生成 `lib/shared/`，插件和 MCP 代理都从这里导入共享模块。下游 `ome/deploy` 分支已提交这些文件，支持 OpenCode V2 [直接从 Git 安装](README.md#git-package-omedeploy-opencode-v2)。
 
 安装后结构应类似：
 
