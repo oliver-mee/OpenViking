@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { captureV2Context, injectV2Context, prepareV2Prompt, startV2Plugin } from "../lib/v2-plugin.mjs"
+import { captureV2Context, startV2Plugin } from "../lib/v2-plugin.mjs"
 import { createVikingUriNotice } from "../lib/viking-uri-guard.mjs"
 
 const BUNDLED_SKILLS = ["openviking-memory", "openviking-rule-search", "openviking-skills", "ov-experience-memory"]
@@ -203,62 +203,6 @@ test("cleanup commits only sessions with new messages", async () => {
   assert.deepEqual(flushes, [{ commit: true, onlyIfUncommitted: true }])
 })
 
-test("prompt starts session context and recall together and keeps block order", async () => {
-  const started = []
-  const pending = {}
-  const call = (name) => new Promise((resolve) => {
-    started.push(name)
-    pending[name] = resolve
-  })
-  const event = { sessionID: "ses_1", messageID: "msg_1", prompt: { text: "query" } }
-  const preparing = prepareV2Prompt(event, {
-    recallEnabled: true,
-    sessionInject: { buildSessionContext: () => call("profile") },
-    recall: { buildRelevantMemories: () => call("recall") },
-  })
-  assert.deepEqual(started, ["profile", "recall"])
-  pending.recall("<recall/>")
-  pending.profile("<profile/>")
-  await preparing
-  assert.deepEqual(event.metadata.openviking.context, ["<profile/>", "<recall/>"])
-})
-
-test("prompt metadata is persisted and context injection is stable across model steps", async () => {
-  let recallCalls = 0
-  const event = {
-    sessionID: "ses_1",
-    messageID: "msg_1",
-    prompt: { text: "find the deployment notes" },
-    metadata: { caller: "test" },
-  }
-  await prepareV2Prompt(event, {
-    directory: "/tmp/project",
-    recallEnabled: true,
-    sessionInject: { buildSessionContext: async () => "<profile>profile</profile>" },
-    recall: {
-      buildRelevantMemories: async (_input, parts) => {
-        recallCalls += 1
-        assert.equal(parts[0].text, "find the deployment notes")
-        return "<openviking-context>memory</openviking-context>"
-      },
-    },
-  })
-  assert.equal(recallCalls, 1)
-  assert.equal(event.metadata.caller, "test")
-
-  const message = { role: "user", content: [{ type: "text", text: event.prompt.text }], metadata: event.metadata }
-  const context = { system: [], messages: [message] }
-  const repoContext = { getRepoSystemPrompt: () => "repo prompt" }
-  injectV2Context(context, repoContext)
-  injectV2Context(context, repoContext)
-
-  assert.equal(message.content.length, 2)
-  assert.match(message.content[0].text, /<profile>profile<\/profile>/)
-  assert.match(message.content[0].text, /<openviking-context>memory<\/openviking-context>/)
-  assert.equal(message.content[0].metadata.openviking, true)
-  assert.equal(context.system.length, 1)
-})
-
 test("captureV2Context advances a per-session cursor and preserves tool parts", async () => {
   const events = []
   const messages = [
@@ -299,8 +243,10 @@ test("v2 prompt, context, after-tool, and event failures are contained", async (
 
   const prompt = { sessionID: "ses_1", messageID: "msg_1", prompt: { text: "query" } }
   runtime.sessionInject.buildSessionContext = async () => "<profile>still available</profile>"
-  await assert.doesNotReject(() => hooks.prompt(prompt))
-  assert.equal(prompt.metadata.openviking.context[0], "<profile>still available</profile>")
+  await assert.doesNotReject(async () => hooks.prompt(prompt))
+  const message = { id: "msg_1", role: "user", content: [{ type: "text", text: "query" }] }
+  await assert.doesNotReject(() => hooks.context({ sessionID: "ses_1", messages: [message], system: [] }))
+  assert.equal(message.content[0].text, "<profile>still available</profile>")
   await assert.doesNotReject(() => hooks.context({ sessionID: "ses_1", messages: null, system: [] }))
   await assert.doesNotReject(() => hooks["execute.after"]({
     status: "completed", tool: "shell", input: { command: "ls" }, result: { content: [] },
