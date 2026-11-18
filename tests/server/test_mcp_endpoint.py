@@ -59,6 +59,8 @@ from openviking_cli.exceptions import (
     UnauthenticatedError,
 )
 from openviking_cli.session.user_id import UserIdentifier
+from tests.utils.fastmcp_contract import call_tool as call_fastmcp_tool
+from tests.utils.fastmcp_contract import list_tools as list_fastmcp_tools
 
 DEFAULT_CTX = RequestContext(
     user=UserIdentifier.the_default_user("test_user"),
@@ -95,11 +97,11 @@ def test_get_ctx_raises_when_unset():
 
 
 async def test_privacy_tools_describe_placeholder_resolution_and_permissions():
-    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    tools = {tool.name: tool for tool in await list_fastmcp_tools(mcp_endpoint.mcp)}
     for name in ("privacy_tree", "privacy_resolve"):
-        assert tools[name].annotations.readOnlyHint is True
-    assert tools["privacy_upsert"].annotations.readOnlyHint is False
-    assert tools["privacy_upsert"].annotations.destructiveHint is True
+        assert tools[name].annotations.read_only_hint is True
+    assert tools["privacy_upsert"].annotations.read_only_hint is False
+    assert tools["privacy_upsert"].annotations.destructive_hint is True
     resolve_tool = tools["privacy_resolve"]
     assert (
         "{{ov_privacy:alice:viking://~/privacy/credential/github#/values/pat}}"
@@ -107,19 +109,20 @@ async def test_privacy_tools_describe_placeholder_resolution_and_permissions():
     )
     assert "SKILL.md" in resolve_tool.description
     assert "Authorization" in resolve_tool.description
-    assert set(resolve_tool.inputSchema["properties"]) == {"reference"}
-    assert resolve_tool.inputSchema["required"] == ["reference"]
-    assert set(tools["privacy_upsert"].inputSchema["required"]) == {
+    assert set(resolve_tool.input_schema["properties"]) == {"reference"}
+    assert resolve_tool.input_schema["required"] == ["reference"]
+    assert set(tools["privacy_upsert"].input_schema["required"]) == {
         "category",
         "target_key",
         "values",
     }
-    assert tools["privacy_upsert"].inputSchema["properties"]["values"]["type"] == "object"
+    assert tools["privacy_upsert"].input_schema["properties"]["values"]["type"] == "object"
 
 
 async def test_privacy_tools_merge_discover_and_resolve_without_echoing_saved_values(client):
     secrets = ["pat-original-marker", "pat-updated-marker", "username-private-marker"]
-    saved = await mcp_endpoint.mcp.call_tool(
+    saved = await call_fastmcp_tool(
+        mcp_endpoint.mcp,
         "privacy_upsert",
         {
             "category": "credential",
@@ -129,12 +132,12 @@ async def test_privacy_tools_merge_discover_and_resolve_without_echoing_saved_va
     )
     assert saved[1]["version"] == 1
     update = {"category": "credential", "target_key": "github", "values": {"pat": secrets[1]}}
-    patched = await mcp_endpoint.mcp.call_tool("privacy_upsert", update)
+    patched = await call_fastmcp_tool(mcp_endpoint.mcp, "privacy_upsert", update)
     assert patched[1]["version"] == 2
     assert [field["field"] for field in patched[1]["fields"]] == ["pat"]
-    repeated = await mcp_endpoint.mcp.call_tool("privacy_upsert", update)
+    repeated = await call_fastmcp_tool(mcp_endpoint.mcp, "privacy_upsert", update)
     assert repeated[1]["version"] == 2
-    tree = await mcp_endpoint.mcp.call_tool("privacy_tree", {"category": "credential"})
+    tree = await call_fastmcp_tool(mcp_endpoint.mcp, "privacy_tree", {"category": "credential"})
     response = await client.get(
         "/api/v1/privacy-configs/tree",
         params={"category": "credential"},
@@ -147,7 +150,8 @@ async def test_privacy_tools_merge_discover_and_resolve_without_echoing_saved_va
         assert '"values"' not in json.dumps(result[1])
     target = tree[1]["categories"][0]["targets"][0]
     assert target["version"] == 2
-    resolved = await mcp_endpoint.mcp.call_tool(
+    resolved = await call_fastmcp_tool(
+        mcp_endpoint.mcp,
         "privacy_resolve",
         {
             "reference": target["fields"][0]["reference"],
@@ -156,7 +160,8 @@ async def test_privacy_tools_merge_discover_and_resolve_without_echoing_saved_va
     assert resolved[1]["value"] == secrets[1]
     assert resolved[1]["version"] == 2
     assert "username" not in resolved[1]
-    retained = await mcp_endpoint.mcp.call_tool(
+    retained = await call_fastmcp_tool(
+        mcp_endpoint.mcp,
         "privacy_resolve",
         {
             "reference": "viking://~/privacy/credential/github#/values/username",
@@ -171,7 +176,8 @@ async def test_privacy_resolve_checks_owner_before_storage(service, monkeypatch,
     monkeypatch.setattr(service.privacy_configs, "exists", exists)
     token = _mcp_ctx.set(RequestContext(DEFAULT_CTX.user, role))
     try:
-        result = await mcp_endpoint.mcp.call_tool(
+        result = await call_fastmcp_tool(
+            mcp_endpoint.mcp,
             "privacy_resolve",
             {
                 "reference": build_privacy_field_reference(
@@ -182,13 +188,14 @@ async def test_privacy_resolve_checks_owner_before_storage(service, monkeypatch,
     finally:
         _mcp_ctx.reset(token)
     assert isinstance(result, CallToolResult)
-    assert result.isError is True
-    assert result.structuredContent["error"]["code"] == "PERMISSION_DENIED"
+    assert result.is_error is True
+    assert result.structured_content["error"]["code"] == "PERMISSION_DENIED"
     exists.assert_not_awaited()
 
 
 async def test_privacy_tools_keep_same_owner_in_other_accounts_isolated():
-    await mcp_endpoint.mcp.call_tool(
+    await call_fastmcp_tool(
+        mcp_endpoint.mcp,
         "privacy_upsert",
         {
             "category": "credential",
@@ -200,8 +207,9 @@ async def test_privacy_tools_keep_same_owner_in_other_accounts_isolated():
         RequestContext(UserIdentifier("another-account", DEFAULT_CTX.user.user_id), Role.USER)
     )
     try:
-        tree = await mcp_endpoint.mcp.call_tool("privacy_tree", {})
-        missing = await mcp_endpoint.mcp.call_tool(
+        tree = await call_fastmcp_tool(mcp_endpoint.mcp, "privacy_tree", {})
+        missing = await call_fastmcp_tool(
+            mcp_endpoint.mcp,
             "privacy_resolve",
             {
                 "reference": build_privacy_field_reference(
@@ -212,13 +220,14 @@ async def test_privacy_tools_keep_same_owner_in_other_accounts_isolated():
     finally:
         _mcp_ctx.reset(token)
     assert tree[1]["categories"] == []
-    assert missing.isError is True
-    assert missing.structuredContent["error"]["code"] == "NOT_FOUND"
+    assert missing.is_error is True
+    assert missing.structured_content["error"]["code"] == "NOT_FOUND"
     assert "account-private-marker" not in repr((tree, missing))
 
 
 async def test_privacy_tools_return_structured_errors_without_values():
-    await mcp_endpoint.mcp.call_tool(
+    await call_fastmcp_tool(
+        mcp_endpoint.mcp,
         "privacy_upsert",
         {
             "category": "credential",
@@ -249,16 +258,16 @@ async def test_privacy_tools_return_structured_errors_without_values():
         ),
     ]
     for name, arguments, code in cases:
-        result = await mcp_endpoint.mcp.call_tool(name, arguments)
+        result = await call_fastmcp_tool(mcp_endpoint.mcp, name, arguments)
         assert isinstance(result, CallToolResult)
-        assert result.isError is True
-        assert result.structuredContent["error"]["code"] == code
+        assert result.is_error is True
+        assert result.structured_content["error"]["code"] == code
         assert "private-input-marker" not in repr(result)
 
 
 async def test_privacy_tools_handle_disabled_service(service, monkeypatch):
     monkeypatch.setattr(service, "_privacy_config_service", None)
-    tree = await mcp_endpoint.mcp.call_tool("privacy_tree", {})
+    tree = await call_fastmcp_tool(mcp_endpoint.mcp, "privacy_tree", {})
     assert tree[1] == {"owner_user_id": DEFAULT_CTX.user.user_id, "categories": []}
     for name, arguments, code in [
         (
@@ -276,9 +285,9 @@ async def test_privacy_tools_handle_disabled_service(service, monkeypatch):
             "FAILED_PRECONDITION",
         ),
     ]:
-        result = await mcp_endpoint.mcp.call_tool(name, arguments)
-        assert result.isError is True
-        assert result.structuredContent["error"]["code"] == code
+        result = await call_fastmcp_tool(mcp_endpoint.mcp, name, arguments)
+        assert result.is_error is True
+        assert result.structured_content["error"]["code"] == code
         assert "disabled-private-marker" not in repr(result)
 
 
@@ -377,16 +386,16 @@ async def test_search_no_results(service, monkeypatch):
 
 
 async def test_rule_search_tool_schema_and_annotations():
-    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    tools = {tool.name: tool for tool in await list_fastmcp_tools(mcp_endpoint.mcp)}
 
     tool = tools["rule_search"]
-    assert tool.annotations.readOnlyHint is True
-    assert tool.annotations.destructiveHint is False
-    assert set(tool.inputSchema["properties"]) == {
+    assert tool.annotations.read_only_hint is True
+    assert tool.annotations.destructive_hint is False
+    assert set(tool.input_schema["properties"]) == {
         "task_context",
         "rule_probability_threshold",
     }
-    assert tool.inputSchema["required"] == ["task_context"]
+    assert tool.input_schema["required"] == ["task_context"]
 
 
 async def test_rule_search_returns_rendered_rules(service, monkeypatch):
@@ -424,19 +433,19 @@ async def test_search_respects_min_score(service):
 
 
 async def test_search_tools_expose_only_context_type_parameter():
-    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    tools = {tool.name: tool for tool in await list_fastmcp_tools(mcp_endpoint.mcp)}
 
     for tool_name in ("find", "search"):
-        properties = tools[tool_name].inputSchema["properties"]
+        properties = tools[tool_name].input_schema["properties"]
         assert "context_type" in properties
         assert "filter" not in properties
 
 
 async def test_recall_tool_is_replaced_by_search_context_mode():
-    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    tools = {tool.name: tool for tool in await list_fastmcp_tools(mcp_endpoint.mcp)}
 
     assert "recall" not in tools
-    search_properties = tools["search"].inputSchema["properties"]
+    search_properties = tools["search"].input_schema["properties"]
     assert search_properties["mode"]["enum"] == ["list", "context"]
     for parameter in (
         "query_expansion",
@@ -475,10 +484,10 @@ async def test_tool_schemas_are_portable():
             if isinstance(node.get(key), dict):
                 assert_portable(node[key], f"{path}.{key}")
 
-    tools = await mcp_endpoint.mcp.list_tools()
+    tools = await list_fastmcp_tools(mcp_endpoint.mcp)
     assert tools
     for tool in tools:
-        assert_portable(tool.inputSchema, tool.name)
+        assert_portable(tool.input_schema, tool.name)
 
 
 def test_portable_schema_collapses_unions():
@@ -1022,8 +1031,8 @@ async def test_search_mode_defaults_preserve_list_threshold_but_not_context_thre
 
 
 async def test_search_context_schema_uses_portable_scalar_types():
-    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
-    properties = tools["search"].inputSchema["properties"]
+    tools = {tool.name: tool for tool in await list_fastmcp_tools(mcp_endpoint.mcp)}
+    properties = tools["search"].input_schema["properties"]
 
     assert properties["detail"]["type"] == "string"
     assert properties["detail"]["enum"] == [
@@ -1190,7 +1199,8 @@ async def test_read_passes_offset_limit_to_visible_read(monkeypatch):
     )
     uri = "viking://resources/notes.md"
 
-    result = await mcp_endpoint.mcp.call_tool(
+    result = await call_fastmcp_tool(
+        mcp_endpoint.mcp,
         "read",
         {
             "uris": uri,
@@ -1233,7 +1243,7 @@ async def test_read_accepts_uri_and_uris(monkeypatch, arguments):
     requested = next(iter(arguments.values()))
     expected = requested if isinstance(requested, list) else [requested]
 
-    result = await mcp_endpoint.mcp.call_tool("read", arguments)
+    result = await call_fastmcp_tool(mcp_endpoint.mcp, "read", arguments)
 
     assert not getattr(result, "isError", False)
     assert [call.args[0] for call in read_visible.await_args_list] == expected
@@ -1249,16 +1259,16 @@ async def test_read_accepts_uri_and_uris(monkeypatch, arguments):
     ],
 )
 async def test_read_rejects_ambiguous_or_missing_uri(arguments, message):
-    result = await mcp_endpoint.mcp.call_tool("read", arguments)
+    result = await call_fastmcp_tool(mcp_endpoint.mcp, "read", arguments)
 
     assert isinstance(result, CallToolResult)
-    assert result.isError is True
+    assert result.is_error is True
     assert result.content[0].text.startswith("INVALID_ARGUMENT: ")
     assert message in result.content[0].text
 
 
-def test_read_schema_offers_uri_and_uris():
-    schema = mcp_endpoint.mcp._tool_manager.get_tool("read").parameters
+async def test_read_schema_offers_uri_and_uris():
+    schema = (await mcp_endpoint.mcp.get_tool("read")).parameters
     assert schema["properties"]["uri"]["type"] == "string"
     assert schema["properties"]["uris"]["type"] == "array"
     assert schema["properties"]["uris"]["items"]["type"] == "string"
@@ -1290,13 +1300,13 @@ async def test_read_image_returns_native_mcp_content(monkeypatch, uri, image_byt
             mcps=SimpleNamespace(read_live_context=AsyncMock(return_value=None)),
         ),
     )
-    result = await mcp_endpoint.mcp.call_tool("read", {"uris": uri})
+    result = await call_fastmcp_tool(mcp_endpoint.mcp, "read", {"uris": uri})
 
     assert isinstance(result, list)
     assert isinstance(result[0], TextContent)
     assert result[0].text == f"Source: {uri}"
     assert isinstance(result[1], ImageContent)
-    assert result[1].mimeType == mime_type
+    assert result[1].mime_type == mime_type
     assert base64.b64decode(result[1].data) == image_bytes
     read_file_bytes.assert_awaited_once_with(uri, ctx=DEFAULT_CTX)
     read_visible.assert_not_awaited()
@@ -1322,14 +1332,14 @@ async def test_read_mixed_batch_preserves_source_order(monkeypatch):
     text_uri = "viking://resources/notes.md"
     image_uri = "viking://resources/chart.jpg"
 
-    result = await mcp_endpoint.mcp.call_tool("read", {"uris": [text_uri, image_uri]})
+    result = await call_fastmcp_tool(mcp_endpoint.mcp, "read", {"uris": [text_uri, image_uri]})
 
     assert isinstance(result, list)
     assert [block.type for block in result] == ["text", "text", "text", "image"]
     assert result[0].text == f"=== {text_uri} ==="
     assert result[1].text == "notes"
     assert result[2].text == f"=== {image_uri} ==="
-    assert result[3].mimeType == "image/jpeg"
+    assert result[3].mime_type == "image/jpeg"
 
 
 @pytest.mark.parametrize(
@@ -1359,13 +1369,13 @@ async def test_read_audio_returns_native_mcp_content(monkeypatch, uri, audio_byt
         ),
     )
 
-    result = await mcp_endpoint.mcp.call_tool("read", {"uris": uri})
+    result = await call_fastmcp_tool(mcp_endpoint.mcp, "read", {"uris": uri})
 
     assert isinstance(result, list)
     assert isinstance(result[0], TextContent)
     assert result[0].text == f"Source: {uri}"
     assert isinstance(result[1], AudioContent)
-    assert result[1].mimeType == mime_type
+    assert result[1].mime_type == mime_type
     assert base64.b64decode(result[1].data) == audio_bytes
 
 
@@ -1510,7 +1520,7 @@ async def test_read_rejects_media_batch_over_aggregate_limit_before_read(monkeyp
         ),
     )
 
-    result = await mcp_endpoint.mcp.call_tool("read", {"uris": [first_uri, second_uri]})
+    result = await call_fastmcp_tool(mcp_endpoint.mcp, "read", {"uris": [first_uri, second_uri]})
 
     assert isinstance(result, list)
     assert "combined media size" in result[3].text
@@ -1540,9 +1550,9 @@ async def test_read_svg_remains_text(monkeypatch):
 
 
 async def test_read_tool_has_no_structured_output_schema():
-    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    tools = {tool.name: tool for tool in await list_fastmcp_tools(mcp_endpoint.mcp)}
 
-    assert tools["read"].outputSchema is None
+    assert tools["read"].output_schema is None
 
 
 # ---------------------------------------------------------------------------
@@ -1956,11 +1966,11 @@ def _stat_service(monkeypatch, stat):
 
 
 async def test_download_tool_is_registered_read_only():
-    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
+    tools = {tool.name: tool for tool in await list_fastmcp_tools(mcp_endpoint.mcp)}
 
     tool = tools["download"]
-    assert set(tool.inputSchema["properties"]) == {"uri"}
-    assert tool.annotations.readOnlyHint is True
+    assert set(tool.input_schema["properties"]) == {"uri"}
+    assert tool.annotations.read_only_hint is True
     assert tool.description.startswith("Get a short-lived URL for downloading")
 
 
@@ -2501,7 +2511,7 @@ async def test_write_and_live_context_read_roundtrip(service, monkeypatch):
     monkeypatch.setattr(
         service.mcps,
         "_discover",
-        AsyncMock(return_value=(SimpleNamespace(protocolVersion="2025-03-26"), [tool])),
+        AsyncMock(return_value=(SimpleNamespace(protocol_version="2025-03-26"), [tool])),
     )
     upstream = SimpleNamespace(
         initialize=AsyncMock(),
@@ -2563,7 +2573,7 @@ async def test_write_and_live_context_read_roundtrip(service, monkeypatch):
     assert "Invoke the MCP tool explicitly" in await read(uris=uri)
     assert upstream.call_tool.await_count == 2
     invoked = await mcp_endpoint.invoke_mcp_tool(tool_uri, {"city": "Beijing"})
-    assert invoked.structuredContent == {"temperature": 23}
+    assert invoked.structured_content == {"temperature": 23}
     assert upstream.call_tool.await_count == 3
 
     await service.mcps.unmount(uri, DEFAULT_CTX, wait=True)
@@ -2735,25 +2745,27 @@ async def test_write_user_managed_subtree_rejected(service):
 
 
 async def test_write_tool_schema_is_portable():
-    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
-    props = tools["write"].inputSchema["properties"]
+    tools = {tool.name: tool for tool in await list_fastmcp_tools(mcp_endpoint.mcp)}
+    props = tools["write"].input_schema["properties"]
     assert props["uri"]["type"] == "string"
     assert props["content"]["type"] == "string"
     assert props["mode"]["enum"] == ["replace", "append", "create"]
     assert props["resolve_conflicts"]["type"] == "boolean"
     assert props["resolve_conflicts"]["default"] is False
-    assert "resolve_conflicts" not in tools["write"].inputSchema.get("required", [])
-    assert {"uri", "content"} <= set(tools["write"].inputSchema.get("required", []))
+    assert "resolve_conflicts" not in tools["write"].input_schema.get("required", [])
+    assert {"uri", "content"} <= set(tools["write"].input_schema.get("required", []))
 
 
 async def test_edit_tool_schema_is_portable():
-    tools = {tool.name: tool for tool in await mcp_endpoint.mcp.list_tools()}
-    props = tools["edit"].inputSchema["properties"]
+    tools = {tool.name: tool for tool in await list_fastmcp_tools(mcp_endpoint.mcp)}
+    props = tools["edit"].input_schema["properties"]
     assert props["uri"]["type"] == "string"
     assert props["old_string"]["type"] == "string"
     assert props["new_string"]["type"] == "string"
     assert props["replace_all"]["type"] == "boolean"
-    assert {"uri", "old_string", "new_string"} <= set(tools["edit"].inputSchema.get("required", []))
+    assert {"uri", "old_string", "new_string"} <= set(
+        tools["edit"].input_schema.get("required", [])
+    )
 
 
 # ---------------------------------------------------------------------------

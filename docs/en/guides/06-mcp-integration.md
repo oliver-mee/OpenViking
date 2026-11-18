@@ -85,23 +85,73 @@ Add `--scope user` to make the config global (shared across all projects).
 
 ### OpenCode
 
-Configure `~/.config/opencode/opencode.json`:
+The OpenViking OpenCode plugin already registers its local stdio-to-HTTP proxy.
+Keep that registration when using the plugin: it preserves the plugin's credential
+selection, account/user context, and actor-peer header. A second direct connection
+would expose another copy of the same tools.
+
+For a direct connection in **OpenCode 2**, use `mcp.servers` in
+`~/.config/opencode/opencode.json` or a project configuration:
 
 ```json
 {
   "mcp": {
-    "openviking": {
-      "type": "remote",
-      "url": "https://your-server.com/mcp",
-      "enabled": true,
-      "oauth": false,
-      "headers": {
-        "Authorization": "Bearer your-api-key-here"
+    "servers": {
+      "openviking": {
+        "type": "remote",
+        "url": "https://your-server.com/mcp",
+        "protocol": "auto"
       }
     }
   }
 }
 ```
+
+This uses OAuth discovery. For an API key connection, add `"oauth": false` and
+`"headers": {"Authorization": "Bearer {env:OPENVIKING_API_KEY}"}` to that server.
+Keep the key in the environment. OpenCode 1 uses the older `mcp.openviking` shape
+and `enabled` flag; do not copy that shape into OpenCode 2.
+
+OpenCode 2 defaults to the legacy `initialize` handshake. Its `protocol: "auto"`
+option probes the 2026-07-28 protocol and falls back to legacy. Both are supported
+by the migrated OpenViking endpoint. The existing OpenViking proxy remains on the
+legacy handshake and does not need a protocol upgrade to use the new tools.
+
+Verify with `opencode mcp list`, then call `health` and read a resource that the
+caller is allowed to access. Connection status alone does not prove data access.
+See the [OpenCode MCP documentation](https://opencode.ai/docs/mcp-servers/).
+
+### Hermes
+
+Hermes's native OpenViking memory plugin uses the REST API for capture, recall,
+and its `viking_*` tools. That integration continues to use the same service and
+credentials after the MCP framework migration. Hosted MCP guides are available
+through an additional direct MCP connection when the full MCP tool surface is
+wanted; they do not replace the native plugin's automatic conversation capture.
+
+For an OAuth connection, add this to the desired Hermes profile's `config.yaml`:
+
+```yaml
+mcp_servers:
+  openviking:
+    url: https://your-server.com/mcp
+    auth: oauth
+```
+
+Then use `hermes mcp login openviking` and restart or reload MCP in that profile.
+For a static User/Admin API key, replace `auth: oauth` with:
+
+```yaml
+    headers:
+      Authorization: "Bearer ${OPENVIKING_API_KEY}"
+```
+
+Hermes also exposes native resource operations when the server advertises them.
+The server's `list_resources` and `read_resource` tools give clients the same
+packaged guides even when they do not expose native resource or Skill operations.
+Check any existing tool include filter when enabling newly added tools.
+See the [Hermes MCP documentation](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp)
+and the [native OpenViking Hermes integration](../agent-integrations/05-hermes.md).
 
 ### Claude.ai / Claude Desktop (OAuth)
 
@@ -121,6 +171,40 @@ Enable `oauth.enabled` on the server and configure HTTPS as described in the OAu
 - `OPENVIKING_PUBLIC_BASE_URL` and the `oauth` config block
 - Token model (`ovat_` / `ovrt_` / `ovac_` prefixes) and revocation
 
+
+## Hosted guides and framework capabilities
+
+The MCP endpoint uses independent Python FastMCP in the OpenViking process.
+Domain handlers keep using OpenViking's own services and request identity. The
+framework does not add a REST proxy hop or a second knowledge store.
+
+Five packaged operational guides are served from the same source as native MCP
+resources, native Skills for supporting clients, and two ordinary tools:
+
+| Tool | Use |
+|------|-----|
+| `list_resources` | Discover the packaged guides and their exact `skill://` URIs. |
+| `read_resource` | Read a discovered guide or a permitted packaged reference. |
+
+Start with `list_resources`, then pass the returned URI to `read_resource`.
+Available guides cover memory, resources, installed Skills, rule retrieval, and
+experience memory. Read the relevant guide before an unfamiliar workflow. Clients
+do not need to copy these guides into a local skills directory.
+
+These packaged guides are server instructions. User-installed Skills remain
+OpenViking knowledge: discover them with `find(context_type="skill")`, read their
+`viking://` URI with `read`, and install or replace them with `add_skill`.
+`read_resource` is not an arbitrary host-file reader or a replacement for the
+knowledge `read` tool. All MCP routes use the existing authentication boundary.
+
+FastMCP provides the Skill resource provider and the Resources-as-Tools bridge.
+The bridge preserves native discovery as well as tool-only access. Tool responses
+retain standard MCP content blocks, structured results where provided, and
+`isError` failures. Original tool names and domain behavior are preserved.
+
+See [FastMCP Skills](https://gofastmcp.com/servers/skills),
+[Resources as Tools](https://gofastmcp.com/servers/transforms/resources-as-tools),
+and [migration and compatibility validation](fastmcp-migration.md).
 
 ## Available MCP Tools
 

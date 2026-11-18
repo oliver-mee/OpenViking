@@ -18,6 +18,7 @@ import pytest_asyncio
 import uvicorn
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
+from openviking.models.vlm.base import VLMResponse
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
@@ -73,7 +74,22 @@ def _install_fake_embedder(monkeypatch):
 def _install_fake_vlm(monkeypatch):
     """Use a fake VLM so server tests never hit external LLM APIs."""
 
-    async def _fake_get_completion(self, prompt, thinking=False):
+    async def _fake_get_completion(
+        self,
+        prompt="",
+        thinking=None,
+        tools=None,
+        tool_choice=None,
+        messages=None,
+        max_tokens=None,
+        reasoning_effort=None,
+    ):
+        del self, thinking, tool_choice, max_tokens, reasoning_effort
+        if tools is not None:
+            # Match the current memory extraction contract with a valid empty result.
+            return VLMResponse(content="sdk.commit()")
+        if messages is not None:
+            prompt = "\n".join(str(message.get("content", "")) for message in messages)
         if "extract user-private configuration items" in prompt:
             return '{"values": {"api_key": "secret-xyz", "base_url": "https://example.com"}}'
         return "# Test Summary\n\nFake summary for testing.\n\n## Details\nTest content."

@@ -24,7 +24,8 @@ from openviking.server.identity import AuthMode, RequestContext, Role
 from openviking.service.compile_service import CompileService
 from openviking.service.external_task_service import ExternalTaskService
 from openviking.service.task_store import PersistentTaskStore
-from openviking.service.task_tracker import TaskRecord, TaskStatus, TaskTracker
+from openviking.service.task_tracker import TaskRecord, TaskStatus, TaskTracker, WorkState
+from openviking.service.task_work_index import extract_task_metadata
 from openviking.storage.queuefs import QueueManager
 from openviking.storage.queuefs.external_task_processor import ExternalTaskProcessor
 from openviking_cli.session.user_id import UserIdentifier
@@ -665,6 +666,24 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     async def state(task):
         return await tracker.get(task.task_id, account_id=task.account_id, user_id=task.user_id)
 
+    async def assert_waiting_for_target(task):
+        # A claimed Task stays RUNNING while its rotated delivery is pending Work.
+        assert (await state(task)).status == TaskStatus.RUNNING
+        queued = [
+            message for message in backend.pending if message["data"]["task_id"] == task.task_id
+        ]
+        assert len(queued) == 1
+        metadata = extract_task_metadata(queued[0])
+        assert metadata is not None
+        assert (
+            await tracker.get_work_state(
+                task.task_id,
+                metadata.work_id,
+                account_id=task.account_id,
+                user_id=task.user_id,
+            )
+        ) is WorkState.PENDING
+
     first = await create()
     waiting = await create(user="bob")
     independent = await create(target="viking://resources/other")
@@ -685,7 +704,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
     assert queried.result["meta"]["request"].get("args", {}) == public_args
 
     await queue.dequeue()  # Same target rotates, including across users.
-    assert (await state(waiting)).status == TaskStatus.PENDING
+    await assert_waiting_for_target(waiting)
     assert waiting.task_id not in submitted
     assert await tracker.has_work(
         waiting.task_id,
@@ -721,7 +740,7 @@ async def test_compile_api_client_session_protocol_retry_and_cancellation(
 
     await queue.dequeue()
     assert waiting.task_id not in submitted
-    assert (await state(waiting)).status == TaskStatus.PENDING
+    await assert_waiting_for_target(waiting)
     if finish == "restart_cancel":
         await tracker.cancel(first.task_id, account_id="acct", user_id="alice")
     release.set()

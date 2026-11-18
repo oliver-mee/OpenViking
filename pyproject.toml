@@ -12,7 +12,7 @@ build-backend = "setuptools.build_meta"
 name = "openviking"
 dynamic = ["version", "readme"]
 description = "An Agent-native context database"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [
     {name = "ByteDance", email = "noreply@bytedance.com"}
 ]
@@ -22,7 +22,6 @@ classifiers = [
     "Intended Audience :: Developers",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -88,7 +87,8 @@ dependencies = [
     "cryptography>=48.0.1",
     "argon2-cffi>=23.0.0",
     "lark-oapi>=1.5.3",
-    "mcp>=1.27,<2",
+    "mcp>=2.3,<3",
+    "fastmcp==4.2.1",
     "pathspec>=1.1.1",
     "grep-ast==0.9.0",
     "tree-sitter-language-pack==1.13.3",
@@ -190,7 +190,7 @@ bot = [
   "ddgs>=9.0.0",
   "tavily-python>=0.5.0",
   "py-machineid>=1.0.0",
-  "mcp>=1,<2",
+  "mcp>=2.3,<3",
   # All optional features included by default
   "langfuse>=3.0.0",
   "python-telegram-bot[socks]>=21.0",
@@ -261,6 +261,8 @@ openviking = [
     "prompts/templates/**/*.yaml",
     "system_assets/**/*",
     "server/static/**/*",
+    "server/mcp_skills/**/*.md",
+    "server/mcp_skills/**/*.yaml",
     "web_studio/dist/**/*",
     "lib/ragfs_python*.so",
     "lib/ragfs_python*.pyd",
@@ -282,7 +284,7 @@ vikingbot = [
 ]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 warn_return_any = false
 warn_unused_configs = true
 disallow_untyped_defs = false
@@ -309,7 +311,7 @@ addopts = "-v --cov=openviking --cov-report=term-missing"
 [tool.ruff]
 line-length = 100
 exclude = ["third_party"]
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = [

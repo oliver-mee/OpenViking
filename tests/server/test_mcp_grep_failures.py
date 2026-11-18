@@ -48,7 +48,7 @@ def _identity():
     [
         (NotFoundError(URI, "file"), "NOT_FOUND"),
         (PermissionDeniedError("access denied"), "PERMISSION_DENIED"),
-        (RuntimeError("vector store unreachable"), "RuntimeError"),
+        (RuntimeError("vector store unreachable"), "INTERNAL"),
     ],
     ids=["not-found", "permission-denied", "backend-error"],
 )
@@ -89,7 +89,9 @@ async def test_one_failing_pattern_does_not_cost_the_others_their_matches():
 
     assert "hit" in out and "L3" in out
     assert "Patterns that could not be searched:" in out
-    assert "bad: RuntimeError: boom" in out
+    assert "bad: INTERNAL:" in out
+    assert "boom" not in out
+    assert "Reference:" in out
 
 
 @pytest.mark.asyncio
@@ -102,8 +104,10 @@ async def test_every_pattern_failing_reports_each_one():
     out = await mcp_endpoint.grep(uri=URI, pattern=["one", "two"])
 
     assert out.startswith("grep failed for every pattern:")
-    assert "one: RuntimeError: boom-one" in out
-    assert "two: RuntimeError: boom-two" in out
+    assert "one: INTERNAL:" in out
+    assert "two: INTERNAL:" in out
+    assert "boom-one" not in out and "boom-two" not in out
+    assert out.count("Reference:") == 2
 
 
 @pytest.mark.asyncio

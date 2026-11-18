@@ -22,6 +22,8 @@ from pydantic import ValidationError
 import openviking.server.mcp_endpoint as mcp_endpoint
 from openviking.retrieve.context_assembler import MAX_EXCLUDE_URIS
 from openviking.server.routers.search import FindRequest, SearchRequest
+from tests.utils.fastmcp_contract import call_tool as call_fastmcp_tool
+from tests.utils.fastmcp_contract import list_tools as list_fastmcp_tools
 
 # name -> (REST field bound as it appears in the JSON schema, out-of-range value)
 BOUNDED = {
@@ -32,7 +34,7 @@ BOUNDED = {
 
 
 async def _search_schema() -> dict:
-    tools = await mcp_endpoint.mcp.list_tools()
+    tools = await list_fastmcp_tools(mcp_endpoint.mcp)
     search = next(tool for tool in tools if tool.name == "search")
     return search.inputSchema["properties"]
 
@@ -58,7 +60,9 @@ async def test_exclude_uris_schema_carries_the_shared_cap():
 @pytest.mark.parametrize("name,value", sorted((n, v) for n, (_, v) in BOUNDED.items()))
 async def test_call_tool_rejects_an_out_of_range_value(name, value):
     with pytest.raises(Exception) as excinfo:
-        await mcp_endpoint.mcp.call_tool("search", {"query": "q", "mode": "context", name: value})
+        await call_fastmcp_tool(
+            mcp_endpoint.mcp, "search", {"query": "q", "mode": "context", name: value}
+        )
 
     assert name in str(excinfo.value)
 
@@ -68,8 +72,8 @@ async def test_call_tool_rejects_more_exclusions_than_it_can_apply():
     too_many = [f"viking://user/u/memories/m{i}.md" for i in range(MAX_EXCLUDE_URIS + 1)]
 
     with pytest.raises(Exception) as excinfo:
-        await mcp_endpoint.mcp.call_tool(
-            "search", {"query": "q", "mode": "context", "exclude_uris": too_many}
+        await call_fastmcp_tool(
+            mcp_endpoint.mcp, "search", {"query": "q", "mode": "context", "exclude_uris": too_many}
         )
 
     assert "exclude_uris" in str(excinfo.value)
@@ -91,8 +95,8 @@ async def test_rest_and_mcp_reject_invalid_search_requests():
 
     with pytest.raises(ValidationError, match="events_time_decay_protection"):
         SearchRequest(query="q", events_time_decay_protection="-1d")
-    result = await mcp_endpoint.mcp.call_tool(
-        "search", {"query": "q", "events_time_decay_protection": "-1d"}
+    result = await call_fastmcp_tool(
+        mcp_endpoint.mcp, "search", {"query": "q", "events_time_decay_protection": "-1d"}
     )
     assert result.isError is True
     assert result.structuredContent["error"]["code"] == "INVALID_ARGUMENT"

@@ -48,7 +48,13 @@ def _drain(provider):
 def _edit(old_text, content):
     from tools.memory_tool import MEMORY_SCHEMA
 
-    actions = MEMORY_SCHEMA["parameters"]["properties"]["action"]["enum"]
+    properties = MEMORY_SCHEMA["parameters"]["properties"]
+    # Current Hermes advertises operations[] only; older reviewed hosts also
+    # advertised the accepted top-level single-operation shape.
+    operation = (
+        properties if "action" in properties else properties["operations"]["items"]["properties"]
+    )
+    actions = operation["action"]["enum"]
     return {
         "action": "patch" if "patch" in actions else "replace",
         "old_text": old_text,

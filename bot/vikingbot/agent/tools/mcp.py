@@ -7,12 +7,17 @@ Original implementation:
 """
 
 import asyncio
+import json
 from contextlib import AsyncExitStack
 from typing import Any
 
-import httpx
+import httpx2 as httpx
 from loguru import logger
 
+from openviking_cli.utils.mcp_logging import (
+    redact_mcp_transport_context,
+    redact_mcp_transport_logs,
+)
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.agent.tools.registry import ToolRegistry
 
@@ -86,7 +91,7 @@ class MCPToolWrapper(Tool):
         self._original_name = tool_def.name
         self._name = f"mcp_{server_name}_{tool_def.name}"
         self._description = tool_def.description or tool_def.name
-        raw_schema = tool_def.inputSchema or {"type": "object", "properties": {}}
+        raw_schema = tool_def.input_schema or {"type": "object", "properties": {}}
         self._parameters = _normalize_schema_for_openai(raw_schema)
         self._tool_timeout = tool_timeout
 
@@ -115,10 +120,11 @@ class MCPToolWrapper(Tool):
         from mcp import types
 
         try:
-            result = await asyncio.wait_for(
-                self._session.call_tool(self._original_name, arguments=kwargs),
-                timeout=self._tool_timeout,
-            )
+            with redact_mcp_transport_logs():
+                result = await asyncio.wait_for(
+                    self._session.call_tool(self._original_name, arguments=kwargs),
+                    timeout=self._tool_timeout,
+                )
         except asyncio.TimeoutError:
             logger.warning("MCP tool '{}' timed out after {}s", self._name, self._tool_timeout)
             return f"Error: MCP tool call timed out after {self._tool_timeout}s"
@@ -131,12 +137,8 @@ class MCPToolWrapper(Tool):
             logger.warning("MCP tool '{}' was cancelled by server/SDK", self._name)
             return "Error: MCP tool call was cancelled"
         except Exception as exc:
-            logger.exception(
-                "MCP tool '{}' failed: {}: {}",
-                self._name,
-                type(exc).__name__,
-                exc,
-            )
+            # HTTP exceptions can contain credential-bearing URLs or headers.
+            logger.warning("MCP tool '{}' failed ({})", self._name, type(exc).__name__)
             return f"Error: MCP tool call failed: {type(exc).__name__}"
 
         parts = []
@@ -146,7 +148,9 @@ class MCPToolWrapper(Tool):
             else:
                 parts.append(str(block))
         text = "\n".join(parts)
-        if result.isError:
+        if not text and result.structured_content is not None:
+            text = json.dumps(result.structured_content, ensure_ascii=False)
+        if result.is_error:
             # AgentLoop uses this prefix to classify execution failure. MCP's
             # isError must not be lost when content blocks become plain text.
             return f"Error: MCP tool '{self._name}' failed: {text or '(no output)'}"
@@ -156,11 +160,25 @@ class MCPToolWrapper(Tool):
 async def connect_mcp_servers(
     mcp_servers: dict, registry: ToolRegistry, stack: AsyncExitStack
 ) -> None:
+    """Connect with task-local redaction for SDK and HTTP transport diagnostics."""
+    with redact_mcp_transport_logs():
+        await _connect_mcp_servers(mcp_servers, registry, stack)
+
+
+async def _connect_mcp_servers(
+    mcp_servers: dict, registry: ToolRegistry, stack: AsyncExitStack
+) -> None:
     """Connect to configured MCP servers and register their tools."""
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.sse import sse_client
     from mcp.client.stdio import stdio_client
     from mcp.client.streamable_http import streamable_http_client
+    from mcp.types import PaginatedRequestParams
+
+    async def enter_transport(manager):
+        # The caller owns stack teardown, which can run after this function's
+        # logging scope has ended. Protect both enter and exit explicitly.
+        return await stack.enter_async_context(redact_mcp_transport_context(manager))
 
     for name, cfg in mcp_servers.items():
         try:
@@ -181,7 +199,7 @@ async def connect_mcp_servers(
                 params = StdioServerParameters(
                     command=cfg.command, args=cfg.args, env=cfg.env or None
                 )
-                read, write = await stack.enter_async_context(stdio_client(params))
+                read, write = await enter_transport(stdio_client(params))
             elif transport_type == "sse":
                 cfg_headers = cfg.headers or {}
 
@@ -203,37 +221,53 @@ async def connect_mcp_servers(
                         auth=auth,
                     )
 
-                read, write = await stack.enter_async_context(
+                read, write = await enter_transport(
                     sse_client(cfg.url, httpx_client_factory=httpx_client_factory)
                 )
             elif transport_type == "streamableHttp":
                 # Always provide an explicit httpx client so MCP HTTP transport does not
                 # inherit httpx's default 5s timeout and preempt the higher-level tool timeout.
-                http_client = await stack.enter_async_context(
+                http_client = await enter_transport(
                     httpx.AsyncClient(
                         headers=cfg.headers or None,
                         follow_redirects=True,
-                        timeout=None,
+                        timeout=httpx.Timeout(10.0, read=None),
                     )
                 )
-                read, write, _ = await stack.enter_async_context(
+                read, write = await enter_transport(
                     streamable_http_client(cfg.url, http_client=http_client)
                 )
             else:
                 logger.warning("MCP server '{}': unknown transport type '{}'", name, transport_type)
                 continue
 
-            session = await stack.enter_async_context(ClientSession(read, write))
+            session = await enter_transport(
+                ClientSession(read, write, read_timeout_seconds=float(cfg.tool_timeout))
+            )
             await session.initialize()
 
-            tools = await session.list_tools()
+            # Catalogs can be paged; publish only a complete successful discovery.
+            tool_defs = []
+            cursor = None
+            seen_cursors = set()
+            for _ in range(100):
+                page = await session.list_tools(params=PaginatedRequestParams(cursor=cursor))
+                tool_defs.extend(page.tools)
+                cursor = page.next_cursor
+                if not cursor:
+                    break
+                if cursor in seen_cursors:
+                    raise ValueError("MCP server repeated a tool pagination cursor")
+                seen_cursors.add(cursor)
+            else:
+                raise ValueError("MCP tool catalog exceeded 100 pages")
             enabled_tools = set(cfg.enabled_tools)
             allow_all_tools = "*" in enabled_tools
             registered_count = 0
             matched_enabled_tools: set[str] = set()
-            available_raw_names = [tool_def.name for tool_def in tools.tools]
-            available_wrapped_names = [f"mcp_{name}_{tool_def.name}" for tool_def in tools.tools]
-            for tool_def in tools.tools:
+            available_raw_names = [tool_def.name for tool_def in tool_defs]
+            available_wrapped_names = [f"mcp_{name}_{tool_def.name}" for tool_def in tool_defs]
+            for tool_def in tool_defs:
                 wrapped_name = f"mcp_{name}_{tool_def.name}"
                 if (
                     not allow_all_tools
@@ -269,5 +303,5 @@ async def connect_mcp_servers(
                     )
 
             logger.info("MCP server '{}': connected, {} tools registered", name, registered_count)
-        except Exception as e:
-            logger.error("MCP server '{}': failed to connect: {}", name, e)
+        except Exception as exc:
+            logger.error("MCP server '{}': failed to connect ({})", name, type(exc).__name__)

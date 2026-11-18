@@ -1,14 +1,79 @@
 import asyncio
 import shutil
 import threading
+import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
 from openviking.pyagfs import AGFSNotFoundError
 
 
-class MockLocalAGFS:
+class MockTreeDirectory:
+    """Flatten the native tree response shape using a test double's ls method."""
+
+    def tree_directory(
+        self,
+        path,
+        show_hidden=False,
+        node_limit=None,
+        level_limit=None,
+        *,
+        offset=0,
+        sort_by=None,
+        sort_order="asc",
+        directories_only=False,
+        ctx=None,
+    ):
+        del ctx
+        entries = []
+
+        def walk(parent, depth):
+            if level_limit is not None and depth > level_limit:
+                return
+            children = self.ls(parent)
+            if sort_by is not None:
+
+                def key(info):
+                    name = str(info["name"])
+                    value = name.casefold() if sort_by == "name" else info.get("mtime", 0)
+                    return value, name
+
+                reverse = sort_order == "desc"
+                children = sorted(
+                    (info for info in children if info.get("isDir")), key=key, reverse=reverse
+                ) + sorted(
+                    (info for info in children if not info.get("isDir")), key=key, reverse=reverse
+                )
+            for info in children:
+                if not show_hidden and info["name"].startswith("."):
+                    continue
+                child_path = f"{parent.rstrip('/')}/{info['name']}"
+                is_dir = info.get("isDir", False)
+                if not directories_only or is_dir:
+                    native_info = dict(info)
+                    native_info.setdefault("mode", 0o755 if is_dir else 0o644)
+                    native_info.setdefault(
+                        "modTime",
+                        datetime.fromtimestamp(info.get("mtime", 0), timezone.utc).isoformat(),
+                    )
+                    entries.append(
+                        {
+                            "path": child_path,
+                            "rel_path": child_path[len(path.rstrip("/")) + 1 :],
+                            "info": native_info,
+                            "depth": depth,
+                        }
+                    )
+                if is_dir:
+                    walk(child_path, depth + 1)
+
+        walk(path, 1)
+        return entries[offset:] if node_limit is None else entries[offset : offset + node_limit]
+
+
+class MockLocalAGFS(MockTreeDirectory):
     """
     A mock implementation of the AGFS binding client that operates on a local
     directory. Useful for tests where running the real RAGFS binding is not
@@ -22,6 +87,7 @@ class MockLocalAGFS:
         self._pathlocks_guard = threading.Lock()
         self._pathlocks = {}
         self._pathlock_leases = {}
+        self._leaders = {}
 
     def _resolve(self, path):
         if str(path).startswith("viking://"):
@@ -175,6 +241,44 @@ class MockLocalAGFS:
 
     def bind_request_context(self, ctx):
         return MagicMock(__enter__=lambda x: None, __exit__=lambda x, y, z: None)
+
+    async def leader_validate_async(self):
+        """The fixture provides one in-process, exclusively owned lease per key."""
+        return None
+
+    async def leader_try_acquire_async(self, key, holder_id, ttl_secs):
+        with self._pathlocks_guard:
+            now = time.monotonic()
+            current = self._leaders.get(key)
+            if current is not None and current["expires"] > now:
+                return None
+            lease_ref = str(uuid.uuid4())
+            self._leaders[key] = {
+                "lease_ref": lease_ref,
+                "holder_id": holder_id,
+                "expires": now + ttl_secs,
+            }
+            return lease_ref
+
+    async def leader_renew_async(self, lease_ref, ttl_secs):
+        with self._pathlocks_guard:
+            now = time.monotonic()
+            for key, lease in list(self._leaders.items()):
+                if lease["lease_ref"] != lease_ref:
+                    continue
+                if lease["expires"] <= now:
+                    del self._leaders[key]
+                    return False
+                lease["expires"] = now + ttl_secs
+                return True
+            return False
+
+    async def leader_release_async(self, lease_ref):
+        with self._pathlocks_guard:
+            for key, lease in list(self._leaders.items()):
+                if lease["lease_ref"] == lease_ref:
+                    del self._leaders[key]
+                    return
 
     async def pathlock_acquire_batch_async(
         self,
