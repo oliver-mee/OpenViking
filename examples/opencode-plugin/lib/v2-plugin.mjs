@@ -6,6 +6,7 @@ import { contextMessageEvents, normalizeV2LifecycleEvent } from "./v2-events.mjs
 import { createV2Recall } from "./v2-recall.mjs"
 import { log } from "./utils.mjs"
 import { registerV2Controls } from "./v2-controls.mjs"
+import { createSkillExperience } from "./skill-experience.mjs"
 
 const CURSOR_KEY_PREFIX = "capture-cursor/"
 const LIFECYCLE_EVENTS = new Set([
@@ -53,6 +54,7 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
     serializeSession,
     captureCurrent: (sessionID, signal) => captureV2Context(ctx, sessionManager, captureCursors, sessionID, { signal }),
   })
+  const skillExperience = createSkillExperience({ config, directory })
 
   if (config.mcp.enabled && ctx?.mcp?.transform) {
     let registered = false
@@ -88,6 +90,7 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
       try {
         await runtime.ready
         await noticeV2Tool(event, vikingUriNotice)
+        await skillExperience.after(event)
       } catch (error) {
         logHookError("tool.execute.after", error)
       }
@@ -134,6 +137,7 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
       const sessionID = event?.data?.sessionID ?? event?.data?.sessionId
       if (!LIFECYCLE_EVENTS.has(event?.type) || !sessionID) return
       if (!(await ownsSession(ctx, sessionOwnership, event, sessionID))) return
+      if (event.type === "session.deleted" || event.type === "session.execution.interrupted") skillExperience.forget(sessionID)
       await serializeSession(async () => {
         await runtime.ready
         if (event.type === "session.execution.failed") {
@@ -165,6 +169,7 @@ export async function startV2Plugin(ctx, runtime, { pluginRoot }) {
   }
 
   return async () => {
+    skillExperience.dispose()
     controller.abort()
     try {
       await eventTask
