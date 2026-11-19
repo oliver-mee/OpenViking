@@ -1,6 +1,6 @@
 {
   "name": "@openviking/opencode-plugin",
-  "version": "0.5.30-ome.3",
+  "version": "0.5.30-ome.4",
   "author": "@openviking",
   "description": "Unified OpenCode plugin for OpenViking repository retrieval and long-term memory",
   "type": "module",
@@ -12,11 +12,11 @@
   "exports": {
     ".": "./index.mjs",
     "./servers/mcp-proxy.mjs": "./servers/mcp-proxy.mjs",
-    "./tui": "./tui.tsx"
+    "./tui": "./tui.mjs"
   },
   "files": [
     "index.mjs",
-    "tui.tsx",
+    "tui.mjs",
     "lib/",
     "servers/",
     "skills/",
