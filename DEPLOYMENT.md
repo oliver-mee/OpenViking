@@ -19,6 +19,11 @@ accepts numeric upstream tags, so set the fork package version explicitly:
 SETUPTOOLS_SCM_PRETEND_VERSION=0.5.5+ome.1 uv build --wheel
 ```
 
+Release only a commit that is on `origin/ome/deploy` and carries a pushed
+`ome-<version>` tag. A wheel built from any other branch is a candidate for
+testing, not a release; merge its commits into `ome/deploy` and tag before
+deploying it as the live service. Record the tag in the release metadata.
+
 Store the wheel, an exact requirements export, checksums and deployment metadata
 under:
 
