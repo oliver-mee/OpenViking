@@ -24,6 +24,11 @@ Release only a commit that is on `origin/ome/deploy` and carries a pushed
 testing, not a release; merge its commits into `ome/deploy` and tag before
 deploying it as the live service. Record the tag in the release metadata.
 
+Refresh the stable MCP proxy that agent configs launch from the same tag:
+`git archive <tag> agent-plugins | tar -x --strip-components=1 -C ~/.local/share/openviking/agent-plugins`,
+then write the tag and commit to `~/.local/share/openviking/agent-plugins/SOURCE`.
+Never point agent configs at a worktree.
+
 Store the wheel, an exact requirements export, checksums and deployment metadata
 under:
 
